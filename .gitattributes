@@ -1,0 +1,23 @@
+# Auto-detección de tipo, normalización a LF en el repo, CRLF en checkout Windows
+* text=auto
+
+# Archivos que siempre son texto (independiente de detección)
+*.cs        text diff=csharp
+*.csproj    text
+*.sln       text
+*.ps1       text eol=crlf
+*.psm1      text eol=crlf
+*.md        text
+*.json      text
+*.xml       text
+*.targets   text
+*.props     text
+
+# Archivos binarios (no diff)
+*.xpz       binary
+*.bak       binary
+*.dll       binary
+*.exe       binary
+*.pdb       binary
+*.mdf       binary
+*.ldf       binary

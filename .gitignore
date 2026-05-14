@@ -1,0 +1,44 @@
+# ---- Build artifacts (.NET) ----
+**/bin/
+**/obj/
+*.pdb
+*.dll
+*.exe
+
+# ---- Runtime / local state ----
+audit*.log
+setup_log.txt
+backups/
+backups-*/
+
+# ---- Local config (paths absolutos del usuario) ----
+# `setup.ps1` regenera config.json en cada install. La plantilla pública es
+# `config.example.json` / `config.multi.example.json`.
+config.json
+config.test.json
+config.local.json
+
+# ---- R&D / reverse-engineering (puede contener exports reales de KBs) ----
+**/probes/
+
+# ---- Documentación interna (notas de fases, prompts, etc.) ----
+docs/
+
+# ---- IDE / editor ----
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+
+# ---- OS ----
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---- Misc ----
+*.swp
+*.tmp
+*.bak

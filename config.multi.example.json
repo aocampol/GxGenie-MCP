@@ -1,0 +1,43 @@
+{
+  "_comment": "Plantilla multi-KB (Fase 4). Reemplazá <PLACEHOLDERS> y agregá o quitá entradas según tus KBs. setup.ps1 puede generarlo automáticamente a partir de las KBs detectadas.",
+  "GeneXus": [
+    {
+      "Version": "17",
+      "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus17U1",
+      "SdkPath": "C:\\GxSDK17",
+      "MSBuildPath": "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\MSBuild.exe"
+    },
+    {
+      "Version": "18",
+      "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
+      "SdkPath": "C:\\GxSDK18",
+      "MSBuildPath": "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\MSBuild.exe"
+    }
+  ],
+  "KnowledgeBases": [
+    {
+      "Name": "<KB_DEV>",
+      "Path": "C:\\KB\\<RUTA>\\<KB_DEV>.gxw",
+      "ConnectionString": "Server=(LocalDB)\\MSSQLLocalDB;Database=GX_KB_<KB_DEV>;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=15",
+      "GeneXusVersion": "17"
+    },
+    {
+      "Name": "<KB_PROD>",
+      "Path": "C:\\KB\\<RUTA>\\<KB_PROD>.gxw",
+      "ConnectionString": "Server=(LocalDB)\\MSSQLLocalDB;Database=GX_KB_<KB_PROD>;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=15",
+      "GeneXusVersion": "17"
+    }
+  ],
+  "ActiveKB": "<KB_DEV>",
+  "Worker": {
+    "ExecutablePath": "<RUTA_AL_REPO>\\GxGenie.Worker\\bin\\Release\\net8.0\\GxGenie.Worker.exe",
+    "TimeoutSeconds": 120
+  },
+  "Security": {
+    "AllowWrite": false,
+    "AllowBuild": false,
+    "AuditLog": true,
+    "AuditLogPath": "<RUTA_AL_REPO>\\audit.log",
+    "BackupRoot": "<RUTA_AL_REPO>\\backups"
+  }
+}

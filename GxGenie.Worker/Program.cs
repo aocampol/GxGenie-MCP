@@ -1,0 +1,306 @@
+using System.Text;
+using System.Text.Json;
+using GxGenie.Worker;
+
+var jsonOpts = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    WriteIndented = false,
+    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+};
+
+Console.OutputEncoding = Encoding.UTF8;
+
+string? configPath = ResolveConfigPath(args);
+WorkerConfig config;
+try
+{
+    config = WorkerConfig.Load(configPath);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Failed to load config: {ex.Message}");
+    return 2;
+}
+
+var session = new WorkerSession(config);
+
+if (args.Any(a => a == "--help" || a == "-h"))
+{
+    PrintUsage();
+    return 0;
+}
+
+// --once '{"tool":"gx_kb_info"}'
+int onceIdx = Array.IndexOf(args, "--once");
+if (onceIdx >= 0 && onceIdx + 1 < args.Length)
+{
+    var resp = Execute(args[onceIdx + 1]);
+    Console.WriteLine(JsonSerializer.Serialize(resp, jsonOpts));
+    return resp.Success ? 0 : 1;
+}
+
+// --tool gx_list_objects --params '{"type":"Transaction"}'
+int toolIdx = Array.IndexOf(args, "--tool");
+if (toolIdx >= 0 && toolIdx + 1 < args.Length)
+{
+    var tool = args[toolIdx + 1];
+    string paramsJson = "{}";
+    int pIdx = Array.IndexOf(args, "--params");
+    if (pIdx >= 0 && pIdx + 1 < args.Length) paramsJson = args[pIdx + 1];
+    var resp = Execute("{\"tool\":\"" + tool + "\",\"params\":" + paramsJson + "}");
+    Console.WriteLine(JsonSerializer.Serialize(resp, jsonOpts));
+    return resp.Success ? 0 : 1;
+}
+
+// Default: line-based stdio loop. One JSON request per line, one JSON
+// response per line. Used by the Gateway via IPC.
+string? line;
+while ((line = Console.In.ReadLine()) != null)
+{
+    if (string.IsNullOrWhiteSpace(line)) continue;
+    var resp = Execute(line);
+    Console.WriteLine(JsonSerializer.Serialize(resp, jsonOpts));
+    Console.Out.Flush();
+}
+return 0;
+
+WorkerResponse Execute(string requestJson)
+{
+    WorkerRequest? req;
+    try
+    {
+        req = JsonSerializer.Deserialize<WorkerRequest>(requestJson, jsonOpts);
+    }
+    catch (Exception ex)
+    {
+        return WorkerResponse.Fail($"Invalid JSON request: {ex.Message}");
+    }
+    if (req is null || string.IsNullOrWhiteSpace(req.Tool))
+        return WorkerResponse.Fail("Missing 'tool' in request");
+
+    try
+    {
+        return Dispatch(req);
+    }
+    catch (Exception ex)
+    {
+        return WorkerResponse.Fail($"{ex.GetType().Name}: {ex.Message}", req.Id);
+    }
+}
+
+WorkerResponse Dispatch(WorkerRequest req)
+{
+    var p = req.Params ?? new Dictionary<string, object?>();
+
+    switch (req.Tool)
+    {
+        case "gx_kb_info":
+        {
+            var info = session.Repo.GetKbInfo(session.Config.KbPath);
+            return WorkerResponse.Ok(new
+            {
+                kb_name = session.Config.ActiveKbName,
+                gx_version = session.Schema.GxVersion,
+                kb_path = info.KbPath,
+                kb_version = info.KbVersion,
+                models = info.Models,
+                object_counts = info.ObjectCounts,
+                total_entities = info.TotalEntities,
+            }, req.Id);
+        }
+        case "gx_list_objects":
+        {
+            var typeFilter = GetString(p, "type");
+            var nameFilter = GetString(p, "filter");
+            var limit = GetInt(p, "limit", 1000);
+            var data = session.Repo.ListObjects(typeFilter, nameFilter, limit);
+            return WorkerResponse.Ok(new { count = data.Count, items = data }, req.Id);
+        }
+        case "gx_read_object":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var type = GetString(p, "type");
+            var detail = session.Repo.ReadObject(name!, type);
+            if (detail is null) return WorkerResponse.Fail($"Object not found: {name}");
+            return WorkerResponse.Ok(detail, req.Id);
+        }
+        case "gx_search":
+        {
+            var query = GetString(p, "query");
+            if (string.IsNullOrEmpty(query)) return WorkerResponse.Fail("Missing 'query'");
+            var where = GetString(p, "search_in") ?? "name";
+            var limit = GetInt(p, "limit", 200);
+            var hits = session.Repo.Search(query!, where, limit);
+            return WorkerResponse.Ok(new { count = hits.Count, hits }, req.Id);
+        }
+        case "gx_list_attributes":
+        {
+            var trn = GetString(p, "transaction");
+            if (string.IsNullOrEmpty(trn)) return WorkerResponse.Fail("Missing 'transaction'");
+            var attrs = session.Repo.ListAttributes(trn!);
+            if (attrs is null) return WorkerResponse.Fail($"Transaction not found: {trn}");
+            return WorkerResponse.Ok(new { count = attrs.Count, attributes = attrs }, req.Id);
+        }
+        case "gx_export_xpz":
+        {
+            var objs = GetStringArray(p, "objects");
+            if (objs is null || objs.Length == 0) return WorkerResponse.Fail("Missing 'objects' (array of 'Type:Name' strings)");
+            var output = GetString(p, "output_path");
+            if (string.IsNullOrEmpty(output)) return WorkerResponse.Fail("Missing 'output_path'");
+            var includeChildren = GetBool(p, "include_children", true);
+            var data = session.Writes.ExportXpz(new WriteTools.ExportArgs(objs, output!, includeChildren));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_import_xpz":
+        {
+            var xpz = GetString(p, "xpz_path");
+            if (string.IsNullOrEmpty(xpz)) return WorkerResponse.Fail("Missing 'xpz_path'");
+            var importType = GetString(p, "import_type") ?? "OnlyNew";
+            var preview = GetBool(p, "preview_mode", false);
+            var backup = GetBool(p, "backup", true);
+            var data = session.Writes.ImportXpz(new WriteTools.ImportArgs(xpz!, importType, preview, backup));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_build_object":
+        {
+            var name = GetString(p, "object_name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'object_name'");
+            var force = GetBool(p, "force_rebuild", false);
+            var data = session.Writes.BuildObject(new WriteTools.BuildArgs(name!, force));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_delete_object":
+        {
+            var objs = GetStringArray(p, "objects");
+            if (objs is null || objs.Length == 0) return WorkerResponse.Fail("Missing 'objects' (array of 'Type:Name' strings)");
+            var includeChildren = GetBool(p, "include_children", true);
+            var data = session.Writes.DeleteObject(new WriteTools.DeleteArgs(objs, includeChildren));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_create_procedure":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var description = GetString(p, "description");
+            var module = GetString(p, "module");
+            var source = GetString(p, "source");
+            var data = session.Writes.CreateProcedure(new WriteTools.CreateProcArgs(name!, description, module, source, null));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_update_object_code":
+        {
+            var type = GetString(p, "type");
+            var name = GetString(p, "name");
+            var newSource = GetString(p, "new_source");
+            var part = GetString(p, "part");
+            if (string.IsNullOrEmpty(type)) return WorkerResponse.Fail("Missing 'type' (ej: 'Procedure')");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            if (newSource is null) return WorkerResponse.Fail("Missing 'new_source'");
+            var data = session.Writes.UpdateObjectCode(new WriteTools.UpdateCodeArgs(type!, name!, newSource, part));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_switch_kb":
+        {
+            var kbName = GetString(p, "kb_name");
+            if (string.IsNullOrEmpty(kbName)) return WorkerResponse.Fail("Missing 'kb_name'");
+            session.SwitchKb(kbName!);
+            // Cargar KbInfo nuevo para confirmar al cliente que el switch funcionó.
+            var info = session.Repo.GetKbInfo(session.Config.KbPath);
+            return WorkerResponse.Ok(new
+            {
+                success = true,
+                kb_name = session.Config.ActiveKbName,
+                gx_version = session.Schema.GxVersion,
+                kb_path = info.KbPath,
+                objects_count = info.TotalEntities,
+                available_kbs = session.Config.KnowledgeBases.Select(k => k.Name).ToArray(),
+            }, req.Id);
+        }
+        case "gx_list_kbs":
+        {
+            var items = session.Config.KnowledgeBases.Select(k => new
+            {
+                name = k.Name,
+                path = k.Path,
+                gx_version = k.GeneXusVersion,
+                active = string.Equals(k.Name, session.Config.ActiveKbName, StringComparison.OrdinalIgnoreCase),
+            }).ToList();
+            return WorkerResponse.Ok(new { count = items.Count, items, active = session.Config.ActiveKbName }, req.Id);
+        }
+        default:
+            return WorkerResponse.Fail($"Unknown tool: {req.Tool}", req.Id);
+    }
+}
+
+static string? GetString(Dictionary<string, object?> p, string key)
+{
+    if (!p.TryGetValue(key, out var v) || v is null) return null;
+    if (v is JsonElement je)
+    {
+        return je.ValueKind switch
+        {
+            JsonValueKind.String => je.GetString(),
+            JsonValueKind.Null => null,
+            _ => je.ToString(),
+        };
+    }
+    return v.ToString();
+}
+
+static int GetInt(Dictionary<string, object?> p, string key, int fallback)
+{
+    if (!p.TryGetValue(key, out var v) || v is null) return fallback;
+    if (v is JsonElement je && je.ValueKind == JsonValueKind.Number && je.TryGetInt32(out var n)) return n;
+    if (int.TryParse(v.ToString(), out var parsed)) return parsed;
+    return fallback;
+}
+
+static bool GetBool(Dictionary<string, object?> p, string key, bool fallback)
+{
+    if (!p.TryGetValue(key, out var v) || v is null) return fallback;
+    if (v is JsonElement je)
+    {
+        if (je.ValueKind == JsonValueKind.True) return true;
+        if (je.ValueKind == JsonValueKind.False) return false;
+        if (je.ValueKind == JsonValueKind.String && bool.TryParse(je.GetString(), out var b)) return b;
+    }
+    if (bool.TryParse(v.ToString(), out var parsed2)) return parsed2;
+    return fallback;
+}
+
+static string[]? GetStringArray(Dictionary<string, object?> p, string key)
+{
+    if (!p.TryGetValue(key, out var v) || v is null) return null;
+    if (v is JsonElement je)
+    {
+        if (je.ValueKind == JsonValueKind.Array)
+            return je.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : x.ToString()).ToArray();
+        if (je.ValueKind == JsonValueKind.String)
+            return new[] { je.GetString() ?? "" };
+    }
+    return null;
+}
+
+static void PrintUsage()
+{
+    Console.WriteLine("GxGenie.Worker — GeneXus KB tools over JSON IPC");
+    Console.WriteLine();
+    Console.WriteLine("Usage:");
+    Console.WriteLine("  GxGenie.Worker.exe                                  Line-based stdio (one JSON request per line)");
+    Console.WriteLine("  GxGenie.Worker.exe --once '<request-json>'          Execute a single request and exit");
+    Console.WriteLine("  GxGenie.Worker.exe --tool <name> --params '<json>'  Convenience form for --once");
+    Console.WriteLine("  GxGenie.Worker.exe --config <path>                  Override config.json location");
+    Console.WriteLine();
+    Console.WriteLine("Tools: gx_kb_info, gx_list_objects, gx_read_object, gx_search, gx_list_attributes,");
+    Console.WriteLine("       gx_export_xpz, gx_import_xpz, gx_build_object, gx_delete_object, gx_create_procedure,");
+    Console.WriteLine("       gx_update_object_code, gx_switch_kb, gx_list_kbs");
+}
+
+static string? ResolveConfigPath(string[] args)
+{
+    int idx = Array.IndexOf(args, "--config");
+    if (idx >= 0 && idx + 1 < args.Length) return args[idx + 1];
+    return null;
+}

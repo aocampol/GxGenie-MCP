@@ -1,0 +1,24 @@
+{
+  "_comment": "Plantilla mínima single-KB. setup.ps1 genera una config real a partir de las KBs detectadas. Para multi-KB ver config.multi.example.json.",
+  "GeneXus": {
+    "Version": "17",
+    "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus17U1",
+    "SdkPath": "C:\\GxSDK17",
+    "MSBuildPath": "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\MSBuild.exe"
+  },
+  "KnowledgeBase": {
+    "Path": "C:\\KB\\<TU_KB>\\<TU_KB>.gxw",
+    "ConnectionString": "Server=(LocalDB)\\MSSQLLocalDB;Database=GX_KB_<TU_KB>;Integrated Security=True;TrustServerCertificate=True;Connect Timeout=15"
+  },
+  "Worker": {
+    "ExecutablePath": "<RUTA_AL_REPO>\\GxGenie.Worker\\bin\\Release\\net8.0\\GxGenie.Worker.exe",
+    "TimeoutSeconds": 120
+  },
+  "Security": {
+    "AllowWrite": false,
+    "AllowBuild": false,
+    "AuditLog": true,
+    "AuditLogPath": "<RUTA_AL_REPO>\\audit.log",
+    "BackupRoot": "<RUTA_AL_REPO>\\backups"
+  }
+}

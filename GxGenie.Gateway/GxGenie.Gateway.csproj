@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>GxGenie.Gateway</RootNamespace>
+    <AssemblyName>GxGenie.Gateway</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyTitle>GxGenie.Gateway</AssemblyTitle>
+    <AssemblyDescription>MCP Gateway over GxGenie.Worker — exposes GeneXus KB tools to Claude Code via JSON-RPC stdio</AssemblyDescription>
+  </PropertyGroup>
+
+</Project>
