@@ -1,181 +1,182 @@
-# Usando GxGenie desde Claude Code
+**English** · [Español](USAGE.es.md)
 
-Guía práctica de cómo invocar las tools del MCP **una vez instalado** (ver
-[README.md](README.md) para instalación).
+# Using GxGenie from Claude Code
+
+A practical guide to invoking the MCP tools **once installed** (see
+[README.md](README.md) for installation).
 
 ---
 
-## El modelo mental
+## The mental model
 
-**No invocás las tools con comandos slash.** Le hablás a Claude en lenguaje
-natural y Claude elige qué tool del MCP llamar según lo que pediste.
+**You don't invoke tools with slash commands.** You talk to Claude in plain
+language and Claude picks which MCP tool to call based on what you asked.
 
 ```
 cd C:\KB\Gx17U1\SampleKB
 claude
 ```
 
-Al iniciar, Claude detecta el `.mcp.json` y la primera vez te pregunta si
-confiás en él. Decí que sí — esa decisión queda guardada para esa carpeta.
+On startup, Claude detects the `.mcp.json` and the first time asks if you
+trust it. Say yes — the decision is remembered for that folder.
 
-Dentro de la sesión, `/mcp` muestra los servers cargados y sus tools.
-
----
-
-## Las 13 tools en una tabla
-
-### Lectura (sin permisos, Claude las usa libremente)
-
-| Tool | Qué hace | Prompt típico |
-|------|----------|---------------|
-| `gx_kb_info` | KB activa, versión, conteo por tipo | *"¿Qué KB tengo cargada?"* |
-| `gx_list_objects` | Lista objetos por tipo + filtro | *"Listame todos los procedures que empiezan con `Calc`"* |
-| `gx_read_object` | Devuelve el source decodificado | *"Mostrame el código de `CalcularTotal`"* |
-| `gx_search` | Busca por nombre o dentro del código | *"¿Dónde se usa el atributo `ClienteId`?"* |
-| `gx_list_attributes` | Atributos de una Transaction | *"¿Qué atributos tiene la transacción `Cliente`?"* |
-| `gx_list_kbs` | Lista KBs configuradas (modo global) | *"¿Qué KBs tengo disponibles?"* |
-
-### Escritura (requieren `AllowWrite=true`, Claude te pide confirmación)
-
-| Tool | Qué hace | Prompt típico |
-|------|----------|---------------|
-| `gx_export_xpz` | Exporta a `.xpz` | *"Exportá `CalcularTotal` a `C:\temp\x.xpz`"* |
-| `gx_import_xpz` | Importa un `.xpz` (backup automático antes) | *"Importá `C:\temp\x.xpz`"* |
-| `gx_create_procedure` | Crea un Procedure nuevo | *"Creá un procedure `Demo` con `msg('hola')`"* |
-| `gx_update_object_code` | **Reemplaza el source de un Part de un objeto** (export → modify XPZ → import UpdatedAndNew) | *"Optimizá el código de `CalcularTotal` así: ..."* |
-| `gx_delete_object` | Borra un objeto (backup antes) | *"Borrá el procedure `Obsoleto`"* |
-| `gx_build_object` | Especifica + genera (requiere `AllowBuild`) | *"Compilá `CalcularTotal`"* |
-| `gx_switch_kb` | Cambia de KB (modo global) | *"Cambiá a la KB `SampleKB2`"* |
+Inside the session, `/mcp` shows the loaded servers and their tools.
 
 ---
 
-## Workflows reales
+## The 13 tools at a glance
 
-### 1) Auditar uso de un atributo antes de un refactor
+### Reading (no permissions required, Claude uses these freely)
+
+| Tool | What it does | Typical prompt |
+|------|--------------|----------------|
+| `gx_kb_info` | Active KB, version, object counts by type | *"What KB do I have loaded?"* |
+| `gx_list_objects` | List objects by type, with filter | *"List all procedures whose name starts with `Calc`"* |
+| `gx_read_object` | Return the decoded source | *"Show me the code of `CalcularTotal`"* |
+| `gx_search` | Search by name or inside source code | *"Where is the attribute `ClienteId` used?"* |
+| `gx_list_attributes` | Attributes of a Transaction | *"What attributes does the `Cliente` transaction have?"* |
+| `gx_list_kbs` | List configured KBs (global mode) | *"What KBs do I have available?"* |
+
+### Writing (require `AllowWrite=true`; Claude also asks for confirmation)
+
+| Tool | What it does | Typical prompt |
+|------|--------------|----------------|
+| `gx_export_xpz` | Export to `.xpz` | *"Export `CalcularTotal` to `C:\temp\x.xpz`"* |
+| `gx_import_xpz` | Import an `.xpz` (auto-backup first) | *"Import `C:\temp\x.xpz`"* |
+| `gx_create_procedure` | Create a new Procedure | *"Create a procedure `Demo` with `msg('hello')`"* |
+| `gx_update_object_code` | **Replace the source of one of an object's Parts** (export → modify XPZ → import UpdatedAndNew) | *"Optimize the code of `CalcularTotal` like this: ..."* |
+| `gx_delete_object` | Delete an object (auto-backup) | *"Delete the procedure `Obsoleto`"* |
+| `gx_build_object` | Specify + generate (requires `AllowBuild`) | *"Build `CalcularTotal`"* |
+| `gx_switch_kb` | Switch active KB (global mode) | *"Switch to KB `SampleKB2`"* |
+
+---
+
+## Real workflows
+
+### 1) Audit usage of an attribute before a refactor
 
 ```
-Tú:  Antes de renombrar `ClienteId` a `CustomerId`, decime todos los
-     objetos que lo usan en su código fuente.
+You:     Before renaming `ClienteId` to `CustomerId`, tell me every
+         object that uses it in its source code.
 
 Claude:  [gx_search query="ClienteId" search_in="code"]
-         Encontré 47 hits en 23 objetos. Los más importantes:
-         - Procedure CalcularDeuda (5 referencias)
-         - WebPanel ConsultaClientes (3 referencias)
-         - DataProvider DPClientes (2 referencias)
+         Found 47 hits across 23 objects. The most important ones:
+         - Procedure CalcularDeuda (5 references)
+         - WebPanel ConsultaClientes (3 references)
+         - DataProvider DPClientes (2 references)
          ...
 ```
 
-### 2) Generar documentación de un procedure
+### 2) Generate documentation for a procedure
 
 ```
-Tú:  Leé el procedure `CalcularDeuda` y documentame qué hace en español
-     plano, qué parámetros recibe, y qué efectos secundarios tiene.
+You:     Read procedure `CalcularDeuda` and document what it does in plain
+         English, what parameters it takes, and what side effects it has.
 
 Claude:  [gx_read_object name="CalcularDeuda" type="Procedure"]
-         [Devuelve source, rules, conditions]
+         [Returns source, rules, conditions]
 
-         CalcularDeuda hace lo siguiente:
-         1. Recibe ClienteId como parámetro de entrada
-         2. Suma las facturas pendientes del cliente
+         CalcularDeuda does the following:
+         1. Receives ClienteId as input parameter
+         2. Sums the customer's pending invoices
          3. ...
-         Efectos secundarios: actualiza la tabla DEUDA_HISTORICO.
+         Side effects: updates the DEUDA_HISTORICO table.
 ```
 
-### 3) Crear un Procedure desde una descripción
+### 3) Create a Procedure from a description
 
 ```
-Tú:  Creá un procedure llamado `DemoMCP` que reciba un
-     ClienteId y haga un msg() con el nombre del cliente.
+You:     Create a procedure called `DemoMCP` that takes a
+         ClienteId and msg()s the customer's name.
 
 Claude:  [gx_create_procedure name="DemoMCP"
           source="parm(in:&ClienteId);
                   for each Cliente where ClienteId=&ClienteId
                       msg(ClienteNombre)
                   endfor"]
-         Procedure creado. Backup en
+         Procedure created. Backup at
          .gxmcp\backups\SampleKB\20260514_153012\..._create_proc_DemoMCP.bak
 ```
 
-### 4) Optimizar un Procedure y aplicarlo
+### 4) Optimize a Procedure and apply
 
 ```
-Tú:  Leé `CalcularTotal`, decime si se puede optimizar, y si sí,
-     aplicá el cambio directo.
+You:     Read `CalcularTotal`, tell me if it can be optimized, and if so,
+         apply the change directly.
 
 Claude:  [gx_read_object name="CalcularTotal"]
-         Veo dos optimizaciones:
-         1. El `for each` anidado puede fusionarse en un join — ahorra
-            ~80% de fetches en KBs con mucha data.
-         2. La validación `&Total > 0` está adentro del loop pero
-            puede salir afuera.
+         I see two optimizations:
+         1. The nested `for each` can be merged into a join — saves
+            ~80% of fetches in data-heavy KBs.
+         2. The `&Total > 0` validation is inside the loop but could
+            be lifted out.
 
-         ¿Aplico los cambios? (te aviso antes con el diff)
+         Apply the changes? (I'll show you the diff first)
 
-Tú:  Sí, dale.
+You:     Yes, go ahead.
 
 Claude:  [gx_update_object_code type="Procedure" name="CalcularTotal"
-          new_source="<código optimizado>"]
-         Aplicado. Backup en
+          new_source="<optimized code>"]
+         Applied. Backup at
          .gxmcp\backups\...update_Procedure_CalcularTotal_source.bak.
-         Si querés revertir: RESTORE DATABASE FROM DISK='...' WITH REPLACE.
+         To revert: RESTORE DATABASE FROM DISK='...' WITH REPLACE.
 ```
 
-**Importante**: hoy `gx_update_object_code` soporta solo `Procedure`
-(parts `source`/`rules`/`conditions`). Para otros tipos (WebPanel Events,
-Transaction Rules, etc.) hay que extender `XpzPartMap.cs` con los GUIDs
-de Part correspondientes — ver sección "Limitaciones actuales" abajo.
+**Important**: today `gx_update_object_code` only supports `Procedure`
+(parts `source` / `rules` / `conditions`). Support for WebPanel Events,
+Transaction Rules, etc. is on the roadmap.
 
-### 5) Compilar lo que cambiaste
+### 5) Build what you changed
 
 ```
-Tú:  Recién importé un XPZ con cambios en `CalcularDeuda`. Compilalo
-     y decime si hay errores.
+You:     I just imported an XPZ with changes to `CalcularDeuda`. Build
+         it and tell me if there are errors.
 
 Claude:  [gx_build_object object_name="CalcularDeuda"]
-         Build OK. Spec + Gen completados sin errores. Log:
+         Build OK. Spec + Gen completed with no errors. Log:
          ...
 ```
 
-### 6) Trabajar con varias KBs (modo global)
+### 6) Work with multiple KBs (global mode)
 
 ```
-Tú:  ¿Qué KBs tengo disponibles?
+You:     What KBs do I have available?
 Claude:  [gx_list_kbs]
-         3 KBs: SampleKB (activa, GX17), SampleKB2 (GX17), SampleKB4 (GX17)
+         3 KBs: SampleKB (active, GX17), SampleKB2 (GX17), SampleKB4 (GX17)
 
-Tú:  Cambiate a SampleKB2 y decime cuántos webpanels tiene.
+You:     Switch to SampleKB2 and tell me how many web panels it has.
 Claude:  [gx_switch_kb kb_name="SampleKB2"] [gx_list_objects type="WebPanel"]
-         SampleKB2 cargada. Tiene 40 WebPanels.
+         SampleKB2 loaded. It has 40 WebPanels.
 ```
 
 ---
 
-## Permisos durante la ejecución
+## Permissions at runtime
 
-Hay **dos capas** de seguridad:
+There are **two layers** of safety:
 
-1. **Claude Code** te pregunta antes de ejecutar cualquier tool de escritura
-   (`Allow once` / `Always allow` / `Deny`). Mientras estás aprendiendo,
-   `Allow once` es lo más prudente.
-2. **El Worker mismo** chequea autorización antes de tocar la KB:
-   - Tools de escritura requieren `AllowWrite=true`
-   - `gx_build_object` requiere `AllowBuild=true`
+1. **Claude Code** asks you before running any write tool
+   (`Allow once` / `Always allow` / `Deny`). While you're learning,
+   `Allow once` is the safest choice.
+2. **The Worker itself** checks authorization before touching the KB:
+   - Write tools require `AllowWrite=true`
+   - `gx_build_object` requires `AllowBuild=true`
 
-Si no están habilitados, el Worker devuelve un error sin tocar la KB
-("Refusing: gx_create_procedure — Security.AllowWrite=false").
+If not enabled, the Worker returns an error without touching the KB
+(*"Refusing: gx_create_procedure — Security.AllowWrite=false"*).
 
-### Cómo habilitar escritura
+### How to enable writes
 
-**Por-sesión (recomendado para empezar):**
+**Per-session (recommended for starting out):**
 ```powershell
-cd C:\KB\<tu-kb>
+cd C:\KB\<your-kb>
 $env:GXGENIE_ALLOW_WRITE = "true"
 $env:GXGENIE_ALLOW_BUILD = "true"
 claude
 ```
-Cuando cerrás esa terminal, las env vars desaparecen.
+When you close that terminal, the env vars are gone.
 
-**Persistente para esa KB:** dropeá un `config.json` en la carpeta de la KB:
+**Persistent for that KB:** drop a `config.json` in the KB folder:
 ```json
 {
   "Security": {
@@ -185,20 +186,20 @@ Cuando cerrás esa terminal, las env vars desaparecen.
   }
 }
 ```
-El Worker mergea esto con el auto-detect — la KB sigue siendo la del cwd,
-pero los flags ganan.
+The Worker merges this with the auto-detect — the KB stays the one from cwd,
+but the flags win.
 
 ---
 
-## Backup y audit
+## Backup and audit
 
-**Cada escritura genera un `.bak` automático antes** bajo:
+**Every write generates a `.bak` snapshot first** under:
 ```
-<carpeta-KB>\.gxmcp\backups\<timestamp>\<dbname>__<tool>.bak
+<KB-folder>\.gxmcp\backups\<timestamp>\<dbname>__<tool>.bak
 ```
-Para revertir: `RESTORE DATABASE <dbname> FROM DISK='<path>.bak' WITH REPLACE`.
+To revert: `RESTORE DATABASE <dbname> FROM DISK='<path>.bak' WITH REPLACE`.
 
-**Cada operación queda registrada** en `<carpeta-KB>\.gxmcp\audit.log`:
+**Every operation is logged** to `<KB-folder>\.gxmcp\audit.log`:
 ```
 2026-05-14 15:30:12 | WRITE   | gx_create_procedure   | DemoMCP  | SUCCESS | backup=...
 ```
@@ -207,52 +208,47 @@ Para revertir: `RESTORE DATABASE <dbname> FROM DISK='<path>.bak' WITH REPLACE`.
 
 ## Troubleshooting
 
-### "El MCP no aparece en `/mcp`"
+### "The MCP doesn't show up in `/mcp`"
 
-1. Verificá que el `.mcp.json` existe: `Get-Content .\.mcp.json`
-2. Verificá que la ruta del `command` apunta a un `.exe` que existe
-3. Mirá el stderr del Gateway: `claude --debug`
-4. Probá invocar el Gateway directo:
+1. Verify the `.mcp.json` exists: `Get-Content .\.mcp.json`
+2. Verify the `command` path points to an `.exe` that exists
+3. Check the Gateway's stderr: `claude --debug`
+4. Try invoking the Gateway directly:
    ```
    C:\Proyectos\GxGenie\GxGenie.Gateway\bin\Release\net8.0\GxGenie.Gateway.exe --help
    ```
 
 ### "Tool failed: KB not found / no .gxw"
 
-El Worker no detectó la KB. Causas posibles:
-- No hay `.gxw` en la carpeta actual
-- Claude se abrió desde otra carpeta (verificá con: *"¿Cuál es mi cwd?"*)
-- Múltiples `.gxw` en la carpeta — el Worker usa el primero, mové los otros
+The Worker didn't detect the KB. Possible causes:
+- No `.gxw` in the current folder
+- Claude was opened from another folder (check with: *"What's my cwd?"*)
+- Multiple `.gxw` files in the folder — the Worker uses the first one, move the others
 
 ### "Cannot open database … login failed"
 
-La LocalDB se desatacheó (MSBuild lo hace tras cada `CloseKnowledgeBase`).
-`LocalDbAttacher.EnsureAttached` debería re-atacharla automáticamente al
-próximo SQL crudo, pero si persiste:
+LocalDB got detached (MSBuild does this after every `CloseKnowledgeBase`).
+The Worker should re-attach automatically on the next raw SQL call, but
+if it persists:
 ```powershell
 sqllocaldb start MSSQLLocalDB
 ```
 
 ### "Worker timeout"
 
-El default es 120s. Para builds largos podés subirlo con un `config.json`
-local: `"Worker": { "TimeoutSeconds": 600 }`.
+Default is 120s. For long builds, raise it with a local `config.json`:
+`"Worker": { "TimeoutSeconds": 600 }`.
 
 ---
 
-## Lo que NO hace este MCP (hoy)
+## What this MCP does NOT do (yet)
 
-Ver [docs/FASE3_NOTES.md](docs/FASE3_NOTES.md) y [docs/FASE4_NOTES.md](docs/FASE4_NOTES.md) para detalle, pero el resumen:
-
-- **`gx_update_object_code` cubre sólo Procedure por ahora** — los parts
-  registrados en `XpzPartMap.cs` son `source`, `rules` y `conditions`
-  de Procedure. Para extender a WebPanel events, Transaction rules,
-  DataProvider source, etc.: hacé un export real del objeto, listá los
-  GUIDs de cada `<Part type="...">` y agregalos al diccionario
-  `XpzPartMap.ByObjectType`. ~10 líneas por tipo de objeto.
-- **Web panel layout** — leer el WebForm XML funciona; modificar layouts
-  no está implementado (sería complejo y riesgoso).
-- **Crear Transactions / agregar atributos** — pendiente (Fase 3.5).
-- **Validación contra GX18** — el adapter está preparado pero sin
-  instalación real de GX18 a la mano no se validó.
-- **Operaciones de team server / GXserver** — fuera de scope.
+- **`gx_update_object_code` covers Procedure only** — supports the `source`,
+  `rules`, and `conditions` parts of Procedure. WebPanel events, Transaction
+  rules, DataProvider source, etc. are on the roadmap.
+- **Web panel layouts** — reading the WebForm XML works; modifying layouts
+  is not implemented.
+- **Creating Transactions / adding attributes** — on the roadmap.
+- **GX18 validation** — the adapter is ready, but without a real GX18 install
+  on hand it hasn't been validated end-to-end.
+- **Team Server / GXserver operations** — out of scope.

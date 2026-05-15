@@ -1,405 +1,249 @@
-# GxGenie — MCP Server para GeneXus 17 / 18
+**English** · [Español](README.es.md)
 
-MCP Server (Model Context Protocol) que permite a **Claude Code** interactuar
-directamente con Knowledge Bases de GeneXus 17 y 18 — leer objetos, crear,
-modificar y compilar — sin necesidad de tener el IDE de GeneXus abierto.
+# GxGenie — MCP Server for GeneXus 17 / 18
 
----
+GxGenie is a [Model Context Protocol](https://modelcontextprotocol.io) server
+that lets **Claude Code** talk to GeneXus 17 / 18 Knowledge Bases directly —
+listing objects, reading source code, creating procedures, exporting/importing
+XPZs, building objects — **without opening the GeneXus IDE**.
 
-## Requisitos
+Talk to your KB in plain language:
 
-| Componente | Versión | Notas |
-|------------|---------|-------|
-| Windows    | 10 / 11 | El SDK de GeneXus es x86 |
-| GeneXus    | 17U1 / 17U11 / 18 | 17 validado E2E; 18 soportado a nivel adapter (ver "Estado") |
-| .NET SDK   | 8.0+    | Se instala automáticamente vía `setup.ps1` |
-| LocalDB    | (incluido con SQL Server Express) | Las KBs persisten en LocalDB |
-| Claude Code | última  | `claude --version` para verificar |
+> *"List all transactions whose name starts with Customer"*
+> *"Show me the source of procedure CalcularTotal"*
+> *"Create a procedure called DemoMCP that logs 'hello'"*
 
 ---
 
-## Instalación rápida
+## Requirements
 
-### Paso 0 — Clonar el repo
+| Component   | Version            | Notes                                                  |
+|-------------|--------------------|--------------------------------------------------------|
+| Windows     | 10 / 11            | GeneXus SDK is x86                                     |
+| GeneXus     | 17U1 / 17U11 / 18  | 17 validated end-to-end; 18 supported via adapter      |
+| .NET SDK    | 8.0+               | Installed automatically by `setup.ps1`                 |
+| LocalDB     | Bundled with SQL Server Express | KBs are persisted in LocalDB             |
+| Claude Code | latest             | Run `claude --version` to check                        |
+
+---
+
+## Installation
+
+The recommended mode is **Per-KB**: the MCP gets attached to each KB folder and
+loads automatically when Claude Code opens it. A global mode is also available
+for multi-KB scenarios with hot switching.
+
+### Per-KB mode (recommended)
 
 ```powershell
-git clone https://github.com/<tu-usuario>/GxGenie.git C:\Proyectos\GxGenie
+git clone https://github.com/aocampol/GxGenie-MCP.git C:\Proyectos\GxGenie
 cd C:\Proyectos\GxGenie
-```
-
-(O descargá el .zip desde "Code → Download ZIP" si preferís).
-
-Después tenés **dos modos de instalación**. El recomendado es el modo Per-KB:
-el MCP se ata a la carpeta de cada KB y se carga sólo cuando Claude Code se
-abre ahí. El alternativo (global) registra el MCP a nivel usuario y usa un
-`config.json` central — útil si querés `gx_switch_kb` o paths no-estándar.
-
-### Opción A — Modo Per-KB (recomendado)
-
-Dropea un `.mcp.json` en la carpeta de cada KB que querés "MCP-habilitar":
-
-```powershell
 .\setup.ps1 -InstallToKb C:\KB\Gx17U1\SampleKB
-.\setup.ps1 -InstallToKb C:\KB\Gx17U11\SampleKB2
-# ... una por KB; setup.ps1 es idempotente, podés repetir
 ```
 
-Cada invocación: detecta .NET 8 (lo instala si falta), compila Worker+Gateway
-(si no están), y crea `.mcp.json` en la carpeta. Para usar el MCP después:
+A single command per KB. Re-run for every KB you want to "MCP-enable" —
+`setup.ps1` is idempotent. It will:
+
+1. Verify .NET 8 SDK (installs via `winget` if missing).
+2. Build Worker + Gateway in Release mode.
+3. Drop a `.mcp.json` file in the KB folder, pointing at the compiled Gateway.
+
+Then to use it:
 
 ```powershell
 cd C:\KB\Gx17U1\SampleKB
 claude
 ```
 
-Claude Code lee el `.mcp.json` automáticamente al abrir y carga el MCP
-`genexus` auto-bindeado a esa KB. **No hace falta `config.json`** — el
-Worker detecta la KB leyendo el `.gxw` + `knowledgebase.connection`
-adyacente.
+The first time Claude Code starts in that folder, it will ask you to approve
+the `genexus` MCP server. Say yes — the decision is remembered per folder.
 
-Para habilitar escritura/build en esa KB:
+**Enabling writes / builds** (off by default for safety):
+
 ```powershell
-$env:GXGENIE_ALLOW_WRITE = "true"      # antes de lanzar claude
+$env:GXGENIE_ALLOW_WRITE = "true"
 $env:GXGENIE_ALLOW_BUILD = "true"
 claude
 ```
-O bien dropeá un `config.json` local en la carpeta de la KB con `Security.AllowWrite=true`.
 
-### Opción B — Modo global (legacy / multi-KB)
+### Global mode (multi-KB)
 
-Registra un MCP único a nivel usuario que usa un `config.json` central:
+Registers a single MCP at the user level and uses a central `config.json`
+listing all your KBs. Required if you want to use `gx_switch_kb` to hop
+between KBs without restarting Claude Code.
 
 ```powershell
 .\setup.ps1
 ```
 
-Esto:
-1. Detecta `.NET 8 SDK` (lo instala vía `winget` si falta).
-2. Detecta una o más instalaciones de GeneXus (17U1, 17U11, 18) en rutas estándar.
-3. Detecta `MSBuild .NET 4.x`, LocalDB y Claude Code CLI.
-4. Compila Worker y Gateway en `Release`.
-5. Escanea `C:\KB`, `D:\KB`, `C:\GeneXus\KB` y arma `config.json` (multi-KB)
-   con las KBs encontradas. Por defecto deja `Security.AllowWrite=false`.
-6. Registra el MCP `genexus` en Claude Code (`claude mcp add`).
-7. Corre un smoke test (`gx_kb_info`).
+This scans `C:\KB`, `D:\KB`, `C:\GeneXus\KB` for `.gxw` files, builds a
+multi-KB `config.json`, and registers the MCP globally via `claude mcp add`.
 
-Ventaja del modo global: podés usar `gx_switch_kb` para cambiar entre KBs
-en la misma sesión de Claude.
-
-### Revertir
+### Uninstall
 
 ```powershell
 .\setup.ps1 -Uninstall
 ```
-Desregistra el MCP global, borra `bin/` y `obj/`, y limpia env vars.
-**No** toca `config.json`, `.mcp.json` ya instalados, `audit.log` ni `backups/`
-— eso lo decidís vos.
 
-### Post-instalación
-
-- En **modo Per-KB**: abrí Claude en una carpeta de KB y probá *"¿Qué KB
-  tengo cargada?"* (invoca `gx_kb_info`).
-- En **modo global**: editá `config.json` y poné `Security.AllowWrite = true`
-  si querés tools de escritura. Después `/mcp` en Claude debería listar `genexus`.
+Removes the global MCP registration, deletes `bin/` and `obj/`, and clears
+environment variables. **Does not** touch `config.json`, `.mcp.json` files
+already deployed to KB folders, `audit.log`, or `backups/` — those are
+yours to manage.
 
 ---
 
-## Arquitectura
+## Usage
+
+You don't invoke tools with slash commands — talk to Claude in plain language
+and it picks the right tool. See **[USAGE.md](USAGE.md)** for the full guide.
+A few quick examples:
+
+### Inspect the KB
+> **You:** What objects are in the current Knowledge Base?
+> **Claude:** *[calls `gx_kb_info`]* SampleKB (GX17), 138,975 entities. Procedures: 4169, WebPanels: 2373, Transactions: 621, SDTs: 1245...
+
+### Read an object's source
+> **You:** Show me the source of procedure CalcularTotal.
+> **Claude:** *[calls `gx_read_object` with `name="CalcularTotal"`]*
+> ```
+> for each Customer
+>     &total += CustomerBalance
+> endfor
+> ```
+
+### Search code for an attribute
+> **You:** Where is the attribute ClienteId used in code?
+> **Claude:** *[calls `gx_search` with `query="ClienteId"`, `search_in="code"`]* Found in 47 objects: ...
+
+### Create a procedure
+> **You:** Create a procedure called DemoMCP that writes "hello" to the log.
+> **Claude:** *[calls `gx_create_procedure`]* Procedure created. Backup at `backups\SampleKB\20260514_104530\GX_KB_SampleKB__create_proc_DemoMCP.bak`.
+
+### Work with two KBs in the same session (global mode only)
+> **You:** List my KBs.
+> **Claude:** *[calls `gx_list_kbs`]* SampleKB (active), SampleKB2, SampleKB4 — all GX17.
+>
+> **You:** Switch to SampleKB2 and tell me how many procedures it has.
+> **Claude:** *[calls `gx_switch_kb`, then `gx_list_objects type=Procedure`]* SampleKB2 has 76 procedures.
+
+---
+
+## Available tools (13)
+
+### Reading (via direct SQL)
+
+| Tool                | Description                                                              |
+|---------------------|--------------------------------------------------------------------------|
+| `gx_kb_info`        | KB version, object counts per type, active KB, GeneXus version          |
+| `gx_list_objects`   | List objects by type with name filter                                    |
+| `gx_read_object`    | Decoded source code (events, rules, body, structure…)                   |
+| `gx_search`         | Search by name (fast) or by code content (slow but thorough)            |
+| `gx_list_attributes`| List attributes of a Transaction with type, length, PK status            |
+
+### Writing (via MSBuild + GeneXus tasks)
+
+| Tool                    | Notes                                                                 |
+|-------------------------|-----------------------------------------------------------------------|
+| `gx_export_xpz`         | Export object(s) to an `.xpz` file                                    |
+| `gx_import_xpz`         | Import an `.xpz`. Auto SQL backup before                              |
+| `gx_create_procedure`   | Create a new Procedure (minimal XPZ generated in memory + import)     |
+| `gx_update_object_code` | Update an object's source (currently Procedure only)                   |
+| `gx_build_object`       | Specify + generate an object (requires `AllowBuild=true`)             |
+| `gx_delete_object`      | Delete an object. Auto SQL backup before                              |
+
+### Multi-KB
+
+| Tool            | Description                                                            |
+|-----------------|------------------------------------------------------------------------|
+| `gx_list_kbs`   | List KBs from `config.json` and indicate which is active               |
+| `gx_switch_kb`  | Hot-swap the active KB without restarting Claude Code                  |
+
+> Writing tools require `Security.AllowWrite=true` (and `AllowBuild=true` for
+> `gx_build_object`) in `config.json`. Off by default — you have to opt in.
+
+---
+
+## Architecture
 
 ```
 Claude Code (Anthropic)
     │ stdio — MCP Protocol (JSON-RPC 2.0)
     ▼
-GxGenie.Gateway       ← .NET 8 — habla MCP con Claude Code
-    │ stdin/stdout JSON (Worker como proceso hijo, long-lived)
+GxGenie.Gateway      ← .NET 8 — speaks MCP with Claude Code
+    │ stdin/stdout JSON (Worker as child process, long-lived)
     ▼
-GxGenie.Worker        ← .NET 8 — dispatcher de 13 tools, multi-KB
+GxGenie.Worker       ← .NET 8 — dispatcher for 13 tools, multi-KB
     │
-    ├── SQL directo (lecturas, vía IKbSchemaAdapter)  → LocalDB de la KB
-    └── MSBuild + Genexus.Tasks.targets (escrituras)   → la BL canónica
-                                                          que usa el IDE
+    ├── Direct SQL (reads)              → LocalDB hosting the KB
+    └── MSBuild + Genexus.Tasks.targets → the same canonical business
+        (writes)                          layer the GeneXus IDE uses
 ```
 
-Decisiones clave:
-- **Sin DLLs de GeneXus cargadas en proceso**: el Worker queda en .NET 8 puro
-  y delega a `msbuild.exe` (que sí carga `genexus.msbuild.tasks.dll`) para
-  toda operación que muta la KB. No requiere elevación.
-- **Backup automático antes de cada escritura**: snapshot SQL (`BACKUP DATABASE`)
-  bajo `backups/{kb}/{timestamp}/`. Restaurable con `RESTORE DATABASE … WITH REPLACE`.
-- **Audit log append-only** en `audit.log` para cada operación destructiva.
-- **Schema adapter** (`IKbSchemaAdapter`) encapsula las pocas variaciones entre
-  GX17 y GX18 — la mayoría del schema SQL es estable entre versiones.
+Key design decisions:
+
+- **No GeneXus DLLs loaded in-process.** The Worker stays in pure .NET 8 and
+  delegates every mutating operation to `msbuild.exe`, which loads the
+  official `genexus.msbuild.tasks.dll`. No elevation required.
+- **Automatic SQL backup before every write.** A `BACKUP DATABASE` snapshot
+  goes under `backups/{kb}/{timestamp}/` before any destructive operation,
+  restorable with `RESTORE DATABASE … WITH REPLACE`.
+- **Append-only audit log** at `audit.log` for every destructive operation.
 
 ---
 
-## MCP Tools disponibles (12)
+## Project structure
 
-### Lectura (vía SQL directo)
-
-| Tool | Descripción | Parámetros principales |
-|------|-------------|------------------------|
-| `gx_kb_info` | Versión KB, conteo por tipo, modelos, KB activa, versión de GeneXus | — |
-| `gx_list_objects` | Listar objetos por tipo + filtro de nombre | `type`, `filter`, `limit` |
-| `gx_read_object` | Código fuente decodificado (events, rules, source body, structure…) | `name`, `type?` |
-| `gx_search` | Búsqueda por nombre (rápido) o por código (lento) | `query`, `search_in`, `limit` |
-| `gx_list_attributes` | Atributos de una Transaction con tipo, longitud, PK | `transaction` |
-
-### Escritura (vía MSBuild + tasks GeneXus)
-
-| Tool | Task MSBuild | Notas |
-|------|--------------|-------|
-| `gx_export_xpz` | `Export` | Genera .xpz; sólo lectura sobre la KB |
-| `gx_import_xpz` | `Import` | Backup SQL automático antes |
-| `gx_create_procedure` | `Import` + XPZ generado | XPZ mínimo en memoria, luego import |
-| `gx_update_object_code` | `Export` + modify XPZ + `Import UpdatedAndNew` | Actualiza source de un Part. Hoy sólo Procedure (source/rules/conditions) |
-| `gx_build_object` | `BuildOne` | Especifica + genera (requiere `AllowBuild=true`) |
-| `gx_delete_object` | `DeleteObject` | Backup automático antes (ver Limitaciones) |
-
-### Multi-KB (Fase 4)
-
-| Tool | Descripción |
-|------|-------------|
-| `gx_list_kbs` | Lista las KBs definidas en config.json e indica cuál está activa |
-| `gx_switch_kb` | Cambia la KB activa en caliente (sin reiniciar Claude Code) |
-
-Todas las tools de escritura requieren `Security.AllowWrite = true` en
-`config.json` (y `AllowBuild = true` para `gx_build_object`). Por defecto
-están deshabilitadas — el setup deja `AllowWrite=false` y necesitás
-editarlas manualmente para autorizar mutaciones.
-
----
-
-## Ejemplos de uso en Claude Code
-
-### 1) Inspeccionar la KB
 ```
-Tú: ¿Qué objetos hay en la Knowledge Base actual?
-Claude: [llama a gx_kb_info]
-        SampleKB (GX17), 138975 entidades.
-        Procedures: 4169, WebPanels: 2373, Transactions: 621, SDTs: 1245...
-```
-
-### 2) Leer código fuente de un objeto
-```
-Tú: Mostrame el source del procedure "CalcularTotal".
-Claude: [llama a gx_read_object con name="CalcularTotal"]
-        // Source de CalcularTotal:
-        for each ...
-```
-
-### 3) Buscar usos de un atributo en el código
-```
-Tú: ¿Dónde se usa el atributo ClienteId en el código?
-Claude: [llama a gx_search con query="ClienteId" y search_in="code"]
-        Lo encontré en 47 objetos: ...
-```
-
-### 4) Crear un procedimiento nuevo
-```
-Tú: Creá un procedure llamado "DemoMCP" que escriba "hola" en el log.
-Claude: [llama a gx_create_procedure con name="DemoMCP" y source="msg('hola')"]
-        Procedure creado. Backup en backups\SampleKB\20260514_104530\GX_KB_SampleKB__create_proc_DemoMCP.bak
-```
-
-### 5) Trabajar con dos KBs en la misma sesión
-```
-Tú: Listame las KBs disponibles.
-Claude: [llama a gx_list_kbs]
-        SampleKB (activa), SampleKB2, SampleKB4 — todas GX17.
-
-Tú: Cambiá a SampleKB2 y decime cuántos procedures tiene.
-Claude: [llama a gx_switch_kb kb_name=SampleKB2] [luego gx_list_objects type=Procedure]
-        Switch OK. SampleKB2 tiene 76 Procedures.
-```
-
-### 6) Exportar un objeto a XPZ
-```
-Tú: Exportá el procedure "DemoMCP" a C:\temp\demo.xpz
-Claude: [llama a gx_export_xpz objects=["Procedure:DemoMCP"] output_path="C:\temp\demo.xpz"]
-        Exportado: 1420 bytes en C:\temp\demo.xpz
+GxGenie/
+├── GxGenie.Gateway/             ← MCP server (.NET 8) — JSON-RPC over stdio
+├── GxGenie.Worker/              ← KB logic (.NET 8) — SQL reads + MSBuild writes
+├── setup.ps1                    ← Idempotent installer (per-KB and global modes)
+├── config.multi.example.json    ← Example multi-KB config
+├── config.example.json          ← Example single-KB config (legacy)
+├── README.md / USAGE.md         ← Documentation
+└── LICENSE                      ← MIT
 ```
 
 ---
 
-## Configuración (config.json)
+## GeneXus version support
 
-GxGenie soporta dos formatos — uno legacy de Fase 1–3 (single-KB) y el de
-Fase 4 (multi-KB). Ambos funcionan; el setup.ps1 genera el formato
-multi-KB.
+| GeneXus version | Reads (SQL)         | Writes (MSBuild)         | Status            |
+|-----------------|---------------------|--------------------------|-------------------|
+| 17U1            | Validated E2E       | Validated E2E            | Production-ready  |
+| 17U11           | Validated on SampleKB2| Same schema as 17U1      | Production-ready  |
+| 18              | Adapter ready       | Depends on Genexus.Tasks | Not validated yet |
 
-### Formato multi-KB (recomendado, Fase 4)
-
-```json
-{
-  "GeneXus": [
-    {
-      "Version": "17",
-      "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus17U1",
-      "SdkPath": "C:\\GxSDK17",
-      "MSBuildPath": "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\MSBuild.exe"
-    },
-    {
-      "Version": "18",
-      "InstallationPath": "C:\\Program Files (x86)\\GeneXus\\GeneXus18",
-      "SdkPath": "C:\\GxSDK18",
-      "MSBuildPath": "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\MSBuild.exe"
-    }
-  ],
-  "KnowledgeBases": [
-    {
-      "Name": "SampleKB",
-      "Path": "C:\\KB\\Gx17U1\\SampleKB\\SampleKB.gxw",
-      "ConnectionString": "Server=(LocalDB)\\MSSQLLocalDB;Database=GX_KB_SampleKB;Integrated Security=True;TrustServerCertificate=True",
-      "GeneXusVersion": "17"
-    },
-    {
-      "Name": "SampleKB2",
-      "Path": "C:\\KB\\Gx17U11\\SampleKB2\\SampleKB2.gxw",
-      "ConnectionString": "Server=(LocalDB)\\MSSQLLocalDB;Database=GX_KB_SampleKB2;Integrated Security=True;TrustServerCertificate=True",
-      "GeneXusVersion": "17"
-    }
-  ],
-  "ActiveKB": "SampleKB",
-  "Worker": {
-    "ExecutablePath": "C:\\Proyectos\\GxGenie\\GxGenie.Worker\\bin\\Release\\net8.0\\GxGenie.Worker.exe",
-    "TimeoutSeconds": 120
-  },
-  "Security": {
-    "AllowWrite": false,
-    "AllowBuild": false,
-    "AuditLog": true,
-    "AuditLogPath": "C:\\Proyectos\\GxGenie\\audit.log",
-    "BackupRoot": "C:\\Proyectos\\GxGenie\\backups"
-  }
-}
-```
-
-Ver `config.multi.example.json` para una versión real.
-
-### Formato legacy (single-KB)
-
-Sigue funcionando — el Worker detecta automáticamente cuál se está usando.
-Ver `config.json` actual del repo como ejemplo.
+The GX18 adapter introspects `INFORMATION_SCHEMA` to handle the historical
+typo `KnowlegeBaseVersion` vs `KnowledgeBaseVersion`, and otherwise assumes
+schema parity with GX17 until validated against a real GX18 KB.
 
 ---
 
-## Cómo compilar manualmente
+## Known limitations
 
-```powershell
-dotnet build C:\Proyectos\GxGenie\GxGenie.Worker\GxGenie.Worker.csproj -c Release
-dotnet build C:\Proyectos\GxGenie\GxGenie.Gateway\GxGenie.Gateway.csproj -c Release
-```
-
-## Cómo registrar manualmente en Claude Code
-
-```powershell
-claude mcp add --transport stdio genexus -- `
-  "C:\Proyectos\GxGenie\GxGenie.Gateway\bin\Release\net8.0\GxGenie.Gateway.exe"
-claude mcp list
-```
-
----
-
-## Estado del soporte por versión
-
-| Versión GeneXus | Lectura (SQL) | Escritura (MSBuild) | Estado |
-|-----------------|---------------|---------------------|--------|
-| 17U1            | ✓ validado E2E | ✓ validado E2E | Production-ready |
-| 17U11           | ✓ validado en SampleKB2 | ✓ (mismo schema que 17U1) | Production-ready |
-| 18              | ⚠ adapter conservador | ⚠ depende de Genexus.Tasks.targets | Ver [docs/FASE4_NOTES.md](docs/FASE4_NOTES.md) |
-
-El adapter de GX18 (`Gx18SchemaAdapter`) es defensivo: prueba el nombre de
-la columna de versión con introspección de `INFORMATION_SCHEMA` por si
-GeneXus corrigió el typo histórico `KnowlegeBaseVersion` → `KnowledgeBaseVersion`.
-El resto del schema asume paridad con GX17 hasta que se valide en una KB GX18
-real.
+1. **`gx_delete_object` doesn't find objects created via `gx_create_procedure`.**
+   MSBuild returns "Procedure X was not found in the KB" even though the row
+   exists. Workaround: delete from the GeneXus IDE.
+2. **`gx_create_procedure` doesn't yet support variables or custom rules** —
+   the XPZ template leaves them empty. Workaround: create the procedure, then
+   edit parts with a follow-up XPZ.
+3. **`gx_build_object`** requires an Environment configured in the KB. A
+   freshly-created KB with no active generator may produce empty output.
+4. **GX18 not validated end-to-end.** The schema adapter is ready, but the
+   type GUIDs used by `gx_create_procedure` come from a GX17 export and
+   should be stable, but haven't been confirmed.
+5. **Switching KBs**: after `gx_switch_kb`, MSBuild may detach the previous
+   DB from LocalDB. `LocalDbAttacher.EnsureAttached` re-attaches on the next
+   raw SQL call — transparent to the user, but the first tool call after a
+   switch may have a 1–2s extra latency.
 
 ---
 
-## Limitaciones conocidas
+## License
 
-1. **`gx_delete_object` no encuentra objetos creados vía `gx_create_procedure`** —
-   MSBuild devuelve "Procedure X was not found in the KB" aunque la fila exista
-   en `EntityVersion`. Hipótesis: falta `parent`/`parentType` en el XPZ
-   generado. Borrar manualmente desde el IDE. Tracking en [docs/FASE3_NOTES.md](docs/FASE3_NOTES.md).
+[MIT](LICENSE) — use it freely, modify it, redistribute it.
 
-2. **`gx_create_procedure` no soporta variables ni rules personalizados** —
-   el template XPZ los crea vacíos. Workaround: crear el procedure y luego
-   editar las parts con un XPZ adicional (TODO Fase 3.5).
-
-3. **`gx_build_object`** requiere un Environment configurado en la KB. En
-   una KB recién creada sin generator activo puede producir output vacío.
-
-4. **GX18 no validado E2E** — sólo el adapter está preparado; los GUIDs
-   de tipo (Procedure, Source, Rules, …) usados por `gx_create_procedure`
-   provienen de un export de GX17 y deberían ser estables, pero no probado.
-
-5. **Switch de KB en MCP**: tras `gx_switch_kb` la sesión usa la nueva KB
-   inmediatamente, pero MSBuild puede detachar la DB anterior del LocalDB.
-   `LocalDbAttacher.EnsureAttached` la reatacha al próximo SQL crudo —
-   transparente para el usuario, pero la primera tool tras un switch puede
-   tardar 1-2s extras.
-
----
-
-## Estructura del proyecto
-
-```
-C:\Proyectos\GxGenie\
-├── CLAUDE.md                    ← Contexto para Claude Code
-├── README.md                    ← Este archivo
-├── docs\                        ← FASE{1..4}_NOTES.md + PROMPT_FASE{1..4}.md
-├── setup.ps1                    ← Instalador idempotente
-├── config.json                  ← Config principal
-├── config.multi.example.json    ← Ejemplo del formato multi-KB
-├── audit.log                    ← Una línea por escritura
-├── backups/                     ← .bak SQL Server (uno por operación)
-├── GxExplorer\                  ← Fase 1, ya no se usa
-├── GxGenie.Worker\                ← .NET 8 — 13 tools, multi-KB
-│   ├── Program.cs               ← Dispatcher + stdio loop
-│   ├── WorkerConfig.cs          ← Soporta single-KB y multi-KB
-│   ├── WorkerSession.cs         ← Estado por-KB hot-swappable
-│   ├── KbRepository.cs          ← SQL puro, recibe IKbSchemaAdapter
-│   ├── IKbSchemaAdapter.cs      ← Gx17 / Gx18 adapters
-│   ├── KbDef.cs                 ← KbDef + GxInstall
-│   ├── KbDecoder.cs / KbTypeMap.cs
-│   ├── MsBuildRunner.cs         ← Auto-detecta Genexus.Tasks.targets
-│   ├── BackupHelper.cs / AuditLogger.cs / LocalDbAttacher.cs
-│   ├── XpzTemplates.cs          ← XPZ mínimo para create_procedure
-│   └── WriteTools.cs            ← 5 tools de escritura
-└── GxGenie.Gateway\               ← .NET 8 — MCP server JSON-RPC stdio
-    ├── Program.cs / GatewayConfig.cs
-    ├── WorkerProxy.cs           ← Spawnea Worker + IPC stdin/stdout
-    ├── McpServer.cs             ← JSON-RPC 2.0 manual
-    └── ToolSchemas.cs           ← 12 input schemas
-```
-
----
-
-## Contribuir
-
-### Cómo agregar una tool nueva
-
-1. **Worker**: añadir `case "gx_mi_tool":` en `Program.cs:Dispatch` que
-   despache a un método de `KbRepository` (lectura) o `WriteTools` (escritura).
-2. **Gateway**: añadir entry en `ToolSchemas.All` con su `inputSchema`.
-3. **Tests**: añadir al smoke test (`test-mcp.ps1` / `test-mcp-write.ps1`).
-4. **Docs**: actualizar la tabla en README.md y CLAUDE.md.
-
-### Reportar bugs
-
-- Reproducir contra `config.test.json` (KB temporal `C:\KB\GxGenieTest`)
-  para no tocar KBs de producción.
-- Adjuntar la última line del log de stderr del Gateway:
-  `& claude mcp logs genexus`.
-- Incluir el contenido de `audit.log` si involucra escritura.
-
----
-
-## Licencia
-
-[MIT](LICENSE) — usalo libremente, modificalo, distribuilo.
-
-Este repo **no incluye binarios de GeneXus** — las DLLs y las tasks de MSBuild
-deben provenir de una instalación licenciada de GeneXus 17 o 18. GeneXus es
-producto comercial de GeneXus S.A.
+This repo **does not include any GeneXus binaries**. The MSBuild tasks DLL
+and GeneXus environment must come from a licensed installation of GeneXus
+17 or 18. GeneXus is a commercial product of GeneXus S.A.
