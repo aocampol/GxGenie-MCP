@@ -298,6 +298,51 @@ WorkerResponse Dispatch(WorkerRequest req)
             var data = session.Writes.SetAttributeProperty(new WriteTools.SetAttrPropertyArgs(name!, prop!, value));
             return WorkerResponse.Ok(data, req.Id);
         }
+        case "gx_set_control_property":
+        {
+            var obj = GetString(p, "object");
+            var ctrl = GetString(p, "control_name");
+            var prop = GetString(p, "property");
+            var value = GetString(p, "value");
+            if (string.IsNullOrEmpty(obj)) return WorkerResponse.Fail("Missing 'object' (Type:Name)");
+            if (string.IsNullOrEmpty(ctrl)) return WorkerResponse.Fail("Missing 'control_name'");
+            if (string.IsNullOrEmpty(prop)) return WorkerResponse.Fail("Missing 'property'");
+            if (value is null) return WorkerResponse.Fail("Missing 'value'");
+            var data = session.Writes.SetControlProperty(new WriteTools.SetControlPropertyArgs(obj!, ctrl!, prop!, value));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_remove_control":
+        {
+            var obj = GetString(p, "object");
+            var ctrl = GetString(p, "control_name");
+            if (string.IsNullOrEmpty(obj)) return WorkerResponse.Fail("Missing 'object' (Type:Name)");
+            if (string.IsNullOrEmpty(ctrl)) return WorkerResponse.Fail("Missing 'control_name'");
+            var data = session.Writes.RemoveControl(new WriteTools.RemoveControlArgs(obj!, ctrl!));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_add_control":
+        {
+            var obj = GetString(p, "object");
+            var kind = GetString(p, "control_kind");
+            if (string.IsNullOrEmpty(obj)) return WorkerResponse.Fail("Missing 'object' (Type:Name)");
+            if (string.IsNullOrEmpty(kind)) return WorkerResponse.Fail("Missing 'control_kind'");
+            // properties is an optional object/dictionary
+            Dictionary<string, string>? properties = null;
+            if (p.TryGetValue("properties", out var propsRaw) && propsRaw is JsonElement je && je.ValueKind == JsonValueKind.Object)
+            {
+                properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in je.EnumerateObject())
+                    properties[prop.Name] = prop.Value.ValueKind == JsonValueKind.String ? (prop.Value.GetString() ?? "") : prop.Value.ToString();
+            }
+            var args = new WriteTools.AddControlArgs(
+                Object: obj!,
+                ParentControlName: GetString(p, "parent_control_name"),
+                ParentId: GetString(p, "parent_id"),
+                ControlKind: kind!,
+                Properties: properties);
+            var data = session.Writes.AddControl(args);
+            return WorkerResponse.Ok(data, req.Id);
+        }
         default:
             return WorkerResponse.Fail($"Unknown tool: {req.Tool}", req.Id);
     }

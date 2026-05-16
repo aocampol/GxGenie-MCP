@@ -126,7 +126,7 @@ public sealed class KbInspector
     /// Some Parts persisted in SQL contain stray NULL bytes (0x00) when the underlying blob
     /// was padded — these are not valid in XML 1.0. Strip them before parsing.
     /// </summary>
-    private static string StripNullBytes(string s) =>
+    internal static string StripNullBytes(string s) =>
         s.IndexOf('\0') < 0 ? s : s.Replace("\0", "");
 
     // ---------------- gx_get_layout ----------------
@@ -175,7 +175,7 @@ public sealed class KbInspector
         };
     }
 
-    private static string DetectLayoutFormat(XElement root)
+    internal static string DetectLayoutFormat(XElement root)
     {
         var name = root.Name.LocalName;
         if (string.Equals(name, "GxMultiForm", StringComparison.OrdinalIgnoreCase)) return "GXML";

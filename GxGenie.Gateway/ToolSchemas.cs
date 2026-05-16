@@ -412,6 +412,71 @@ public static class ToolSchemas
             ),
         },
 
+        // ----- Phase B3: granular writes on layout -----
+
+        new()
+        {
+            Name = "gx_set_control_property",
+            WorkerTool = "gx_set_control_property",
+            Description = "Modifica una property (atributo XML) de un control existente en el layout de un WebPanel/Transaction. Pipeline: read Web Form XML → encontrar control por controlName (GXML lowercase o KIP PascalCase) → setear el attribute → reusar update_object_code para persistir (backup + audit + import). Soporta KIP y GXML.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("object", Prop("string", "Objeto en formato 'Type:Name' (ej: 'WebPanel:RwdRecentLinks').", new JsonObject
+                    {
+                        ["pattern"] = "^(WebPanel|Transaction):.+$",
+                    })),
+                    ("control_name", Prop("string", "controlName del control a modificar (case-insensitive).")),
+                    ("property", Prop("string", "Nombre del attribute XML a setear (ej: 'caption', 'class', 'width', 'visible', 'enabled').")),
+                    ("value", Prop("string", "Nuevo valor del attribute. '' para vaciar."))
+                )),
+                ("required", new JsonArray("object", "control_name", "property", "value")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_remove_control",
+            WorkerTool = "gx_remove_control",
+            Description = "Quita un control del layout de un WebPanel/Transaction (su elemento XML, incluyendo descendientes). Pipeline igual a set_control_property. Cuidado: si el control referencia variables/atributos, las referencias se rompen — re-compilar para detectarlas.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("object", Prop("string", "Objeto en formato 'Type:Name'.", new JsonObject { ["pattern"] = "^(WebPanel|Transaction):.+$" })),
+                    ("control_name", Prop("string", "controlName del control a quitar."))
+                )),
+                ("required", new JsonArray("object", "control_name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_add_control",
+            WorkerTool = "gx_add_control",
+            Description = "Agrega un control nuevo dentro de un parent identificado por su controlName (cualquier control) o su id (GUID del elemento). Solo soporta GXML (layout moderno). Para KIP usar gx_update_object_code con el webform XML completo. Se valida que el control_kind sea válido como hijo del parent_kind (ej: 'textblock' va dentro de 'cell', no de 'row'). Genera automáticamente un id GUID para el nuevo control.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("object", Prop("string", "Objeto en formato 'Type:Name'.", new JsonObject { ["pattern"] = "^(WebPanel|Transaction):.+$" })),
+                    ("parent_control_name", Prop("string", "controlName del parent. Mutuamente exclusivo con parent_id.")),
+                    ("parent_id", Prop("string", "id (GUID) del parent. Mutuamente exclusivo con parent_control_name. Usar cuando el parent no tiene controlName (ej: una <cell>).")),
+                    ("control_kind", Prop("string", "Tipo de control GXML.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("textblock", "input", "action", "checkbox", "label", "img", "grid", "tab", "tabPage", "stencil", "table", "htable", "vtable", "canvas", "flex", "responsive", "section", "row", "cell"),
+                    })),
+                    ("properties", Obj(
+                        ("type", "object"),
+                        ("description", "Diccionario de attributes XML a setear en el nuevo control (ej: {\"controlName\":\"MyButton\",\"caption\":\"OK\",\"class\":\"BtnPrimary\"}). 'id' es ignorado — se genera automáticamente."),
+                        ("additionalProperties", new JsonObject { ["type"] = "string" })
+                    ))
+                )),
+                ("required", new JsonArray("object", "control_kind")),
+                ("additionalProperties", false)
+            ),
+        },
+
         new()
         {
             Name = "gx_list_object_parts",

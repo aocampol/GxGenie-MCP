@@ -525,6 +525,240 @@ public sealed class WriteTools
         WriteXpzWithDoc(xpzPath, innerName + ".xml", doc);
     }
 
+    // ===========================================================================
+    // Phase B3 — granular writes on layout (Web Form Part)
+    // All three layout writers reuse UpdateObjectCode as the persistence engine:
+    // we mutate the webform XML in memory and feed the modified text back through
+    // the same backup → export → patch XPZ → import UpdatedAndNew pipeline.
+    // ===========================================================================
+
+    private (string Type, string Name) ParseObjectRef(string objectRef, string argName)
+    {
+        if (string.IsNullOrWhiteSpace(objectRef))
+            throw new ArgumentException($"'{argName}' is required (format 'Type:Name', e.g. 'WebPanel:MyPanel')");
+        var parts = objectRef.Split(':', 2);
+        if (parts.Length != 2 || string.IsNullOrEmpty(parts[0]) || string.IsNullOrEmpty(parts[1]))
+            throw new ArgumentException($"'{argName}' must be in 'Type:Name' format, got '{objectRef}'");
+        return (parts[0], parts[1]);
+    }
+
+    /// <summary>
+    /// Loads the webform XML of an object, hands it to <paramref name="mutator"/>, and
+    /// writes the result back via <see cref="UpdateObjectCode"/>. Throws if the object
+    /// has no webform Part. The mutator runs against the parsed root <see cref="XElement"/>
+    /// (root is <c>&lt;GxMultiForm&gt;</c> for GXML, <c>&lt;body&gt;</c> for KIP).
+    /// </summary>
+    private (string Type, string Name, string Format) MutateWebform(string objectRef, Action<XElement, string> mutator)
+    {
+        var (type, name) = ParseObjectRef(objectRef, "object");
+        var detail = _repo.ReadObject(name, type)
+            ?? throw new ArgumentException($"Object not found: {objectRef}");
+        if (!detail.Parts.TryGetValue("webform", out var xml) || string.IsNullOrWhiteSpace(xml))
+            throw new InvalidOperationException(
+                $"{objectRef} has no 'webform' Part. Available parts: {string.Join(", ", detail.Parts.Keys)}");
+
+        XDocument doc;
+        try { doc = XDocument.Parse(KbInspector.StripNullBytes(xml!)); }
+        catch (Exception ex) { throw new InvalidOperationException($"Could not parse webform XML for {objectRef}: {ex.Message}"); }
+
+        var format = KbInspector.DetectLayoutFormat(doc.Root!);
+        mutator(doc.Root!, format);
+
+        // Reuse UpdateObjectCode for the persistence work — it does the backup,
+        // export, in-place XPZ patch, import, and audit log. We just supply the new XML.
+        var newXml = doc.ToString(SaveOptions.DisableFormatting);
+        UpdateObjectCode(new UpdateCodeArgs(detail.Type, detail.Name, newXml, "webform"));
+        return (detail.Type, detail.Name, format);
+    }
+
+    /// <summary>
+    /// Finds a control element by name. GXML uses lowercase <c>controlName</c>; KIP uses
+    /// PascalCase <c>ControlName</c>. We accept either with case-insensitive value match.
+    /// Returns null if not found.
+    /// </summary>
+    private static XElement? FindControlByName(XElement root, string controlName) =>
+        root.Descendants().FirstOrDefault(e =>
+            string.Equals(e.Attribute("controlName")?.Value, controlName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(e.Attribute("ControlName")?.Value, controlName, StringComparison.OrdinalIgnoreCase));
+
+    private static string[] ListControlNames(XElement root) =>
+        root.Descendants()
+            .Select(e => e.Attribute("controlName")?.Value ?? e.Attribute("ControlName")?.Value ?? "")
+            .Where(s => !string.IsNullOrEmpty(s))
+            .Distinct()
+            .ToArray();
+
+    // -------- gx_set_control_property --------
+
+    public sealed record SetControlPropertyArgs(string Object, string ControlName, string Property, string Value);
+
+    /// <summary>
+    /// Modifica una property (atributo XML) de un control existente en el layout.
+    /// Reusa <see cref="UpdateObjectCode"/> como motor de persistencia.
+    /// </summary>
+    public object SetControlProperty(SetControlPropertyArgs args)
+    {
+        EnsureWriteAllowed("gx_set_control_property");
+        if (string.IsNullOrWhiteSpace(args.ControlName)) throw new ArgumentException("'control_name' is required");
+        if (string.IsNullOrWhiteSpace(args.Property)) throw new ArgumentException("'property' is required");
+        if (args.Value is null) throw new ArgumentException("'value' is required (use '' to clear)");
+
+        string? oldValue = null;
+        string? controlKind = null;
+        var info = MutateWebform(args.Object, (root, format) =>
+        {
+            var ctrl = FindControlByName(root, args.ControlName)
+                ?? throw new InvalidOperationException(
+                    $"Control '{args.ControlName}' not found in {args.Object}. " +
+                    $"Available: {string.Join(", ", ListControlNames(root))}");
+
+            controlKind = ctrl.Name.LocalName;
+            oldValue = ctrl.Attribute(args.Property)?.Value;
+            ctrl.SetAttributeValue(args.Property, args.Value);
+        });
+
+        return new
+        {
+            success = true,
+            @object = $"{info.Type}:{info.Name}",
+            format = info.Format,
+            control = args.ControlName,
+            control_kind = controlKind,
+            property = args.Property,
+            old_value = oldValue,
+            new_value = args.Value,
+        };
+    }
+
+    // -------- gx_remove_control --------
+
+    public sealed record RemoveControlArgs(string Object, string ControlName);
+
+    /// <summary>
+    /// Quita un control del layout (su elemento XML). Si el control tiene hijos, también desaparecen.
+    /// No limpia cells/rows que queden vacíos — un cell sin children es válido en GXML/KIP.
+    /// </summary>
+    public object RemoveControl(RemoveControlArgs args)
+    {
+        EnsureWriteAllowed("gx_remove_control");
+        if (string.IsNullOrWhiteSpace(args.ControlName)) throw new ArgumentException("'control_name' is required");
+
+        string? controlKind = null;
+        int childrenRemoved = 0;
+        var info = MutateWebform(args.Object, (root, format) =>
+        {
+            var ctrl = FindControlByName(root, args.ControlName)
+                ?? throw new InvalidOperationException(
+                    $"Control '{args.ControlName}' not found in {args.Object}. " +
+                    $"Available: {string.Join(", ", ListControlNames(root))}");
+
+            controlKind = ctrl.Name.LocalName;
+            childrenRemoved = ctrl.Descendants().Count();
+            ctrl.Remove();
+        });
+
+        return new
+        {
+            success = true,
+            @object = $"{info.Type}:{info.Name}",
+            format = info.Format,
+            control = args.ControlName,
+            control_kind = controlKind,
+            descendants_also_removed = childrenRemoved,
+        };
+    }
+
+    // -------- gx_add_control --------
+
+    public sealed record AddControlArgs(
+        string Object,
+        string? ParentControlName,
+        string? ParentId,
+        string ControlKind,
+        Dictionary<string, string>? Properties);
+
+    private static readonly Dictionary<string, string[]> GxmlAllowedControls = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Container → list of allowed child kinds. Conservative whitelist; can be relaxed once tested.
+        ["cell"]    = new[] { "textblock", "input", "action", "checkbox", "label", "img", "grid", "tab", "stencil", "table", "htable", "vtable", "canvas", "flex", "responsive", "section" },
+        ["row"]     = new[] { "cell" },
+        ["table"]   = new[] { "row" },
+        ["htable"]  = new[] { "cell" },
+        ["vtable"]  = new[] { "row" },
+        ["canvas"]  = new[] { "textblock", "input", "action", "checkbox", "label", "img", "grid", "tab", "stencil", "table" },
+        ["flex"]    = new[] { "textblock", "input", "action", "checkbox", "label", "img", "grid", "tab", "stencil", "table", "flex" },
+        ["section"] = new[] { "textblock", "input", "action", "checkbox", "label", "img", "grid", "tab", "stencil", "table" },
+    };
+
+    /// <summary>
+    /// Agrega un control nuevo al layout, dentro de un parent identificado por su
+    /// <c>controlName</c> o <c>id</c>. Genera un nuevo GUID para el id del control creado.
+    /// Solo soporta GXML por ahora (KIP requeriría un set distinto de control kinds).
+    /// </summary>
+    public object AddControl(AddControlArgs args)
+    {
+        EnsureWriteAllowed("gx_add_control");
+        if (string.IsNullOrWhiteSpace(args.ControlKind)) throw new ArgumentException("'control_kind' is required");
+        if (string.IsNullOrWhiteSpace(args.ParentControlName) && string.IsNullOrWhiteSpace(args.ParentId))
+            throw new ArgumentException("Specify exactly one of 'parent_control_name' or 'parent_id'");
+        if (!string.IsNullOrWhiteSpace(args.ParentControlName) && !string.IsNullOrWhiteSpace(args.ParentId))
+            throw new ArgumentException("'parent_control_name' and 'parent_id' are mutually exclusive");
+
+        var newId = Guid.NewGuid().ToString().ToLowerInvariant();
+        string? parentKind = null;
+        var info = MutateWebform(args.Object, (root, format) =>
+        {
+            if (!string.Equals(format, "GXML", StringComparison.OrdinalIgnoreCase))
+                throw new NotSupportedException(
+                    $"gx_add_control currently supports GXML layouts only ({args.Object} is {format}). " +
+                    "For KIP, use gx_update_object_code with the full webform XML.");
+
+            XElement? parent;
+            if (!string.IsNullOrWhiteSpace(args.ParentControlName))
+            {
+                parent = FindControlByName(root, args.ParentControlName!)
+                    ?? throw new InvalidOperationException($"Parent control '{args.ParentControlName}' not found in {args.Object}.");
+            }
+            else
+            {
+                parent = root.Descendants().FirstOrDefault(e =>
+                    string.Equals(e.Attribute("id")?.Value, args.ParentId, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidOperationException($"Parent element with id='{args.ParentId}' not found in {args.Object}.");
+            }
+
+            parentKind = parent.Name.LocalName;
+            if (GxmlAllowedControls.TryGetValue(parentKind, out var allowedChildren) &&
+                !allowedChildren.Contains(args.ControlKind, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot add a '{args.ControlKind}' inside a '{parentKind}'. " +
+                    $"Allowed children of {parentKind}: {string.Join(", ", allowedChildren)}.");
+            }
+
+            var newEl = new XElement(args.ControlKind, new XAttribute("id", newId));
+            if (args.Properties != null)
+            {
+                foreach (var kv in args.Properties)
+                {
+                    if (string.Equals(kv.Key, "id", StringComparison.OrdinalIgnoreCase)) continue; // we own this
+                    newEl.SetAttributeValue(kv.Key, kv.Value);
+                }
+            }
+            parent.Add(newEl);
+        });
+
+        return new
+        {
+            success = true,
+            @object = $"{info.Type}:{info.Name}",
+            format = info.Format,
+            new_control_id = newId,
+            new_control_kind = args.ControlKind,
+            parent_kind = parentKind,
+            properties_applied = args.Properties?.Count ?? 0,
+        };
+    }
+
     // -------- gx_remove_attribute --------
 
     public sealed record RemoveAttributeArgs(string Transaction, string Name, string? Level);
