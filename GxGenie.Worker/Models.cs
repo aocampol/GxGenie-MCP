@@ -47,6 +47,8 @@ public sealed class ObjectListItem
 public sealed class AttributeInfo
 {
     public int Position { get; set; }
+    /// <summary>ATTRIBUTE.attri_num — also used as the value of &lt;Attribute Id="…"&gt; in the Structure Part XML.</summary>
+    public int AttriNum { get; set; }
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public int Length { get; set; }

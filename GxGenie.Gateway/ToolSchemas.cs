@@ -257,23 +257,177 @@ public static class ToolSchemas
         {
             Name = "gx_update_object_code",
             WorkerTool = "gx_update_object_code",
-            Description = "Actualiza el código de un Part de un objeto existente (Procedure source/rules/conditions hoy; otros tipos requieren extender XpzPartMap). Pipeline: backup → Export → modificar XPZ in-memory → Import UpdatedAndNew. Hace backup SQL automático antes — restaurable si algo falla.",
+            Description = "Actualiza el código/contenido de un Part de un objeto existente. Tipos editables: Procedure (source/rules/conditions/documentation), DataProvider (source/rules/documentation), WebPanel (events/rules/conditions/webform/documentation), Transaction (events/rules/webform/documentation), Domain (documentation), DataSelector/SDT/Query/DataView/Module/Image/Theme/ExternalObject/Category (documentation). Parts estructurados (Variables, Help, Structure, etc) NO son editables — usa gx_list_object_parts para ver el catálogo. Pipeline: backup SQL → Export → modificar XPZ → Import UpdatedAndNew. Restaurable desde el .bak si algo falla.",
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("type", Prop("string", "Tipo de objeto. Hoy solo 'Procedure' está registrado en XpzPartMap.", new JsonObject
+                    ("type", Prop("string", "Tipo de objeto.", new JsonObject
                     {
-                        ["enum"] = new JsonArray("Procedure"),
+                        ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction", "Domain",
+                                          "DataSelector", "DataView", "SDT", "Query", "Module", "Image",
+                                          "Theme", "WebTheme", "ExternalObject", "Category"),
                     })),
                     ("name", Prop("string", "Nombre exacto del objeto a actualizar (case-insensitive).")),
-                    ("new_source", Prop("string", "Nuevo código completo del Part. Reemplaza el contenido existente — no es un patch incremental.")),
-                    ("part", Prop("string", "Qué Part actualizar. Default 'source' (cuerpo del procedure). Otras opciones para Procedure: 'rules', 'conditions'.", new JsonObject
+                    ("new_source", Prop("string", "Nuevo código/contenido completo del Part. Reemplaza el contenido existente — no es un patch incremental.")),
+                    ("part", Prop("string", "Qué Part actualizar. Si se omite: 'events' para WebPanel/Transaction, 'source' para los demás. Llamá a gx_list_object_parts para ver los disponibles por tipo.", new JsonObject
                     {
-                        ["enum"] = EnumOf("source", "rules", "conditions"),
-                        ["default"] = "source",
+                        ["enum"] = EnumOf("source", "rules", "events", "conditions", "webform", "documentation"),
                     }))
                 )),
                 ("required", new JsonArray("type", "name", "new_source")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        // ----- Phase B1: structured read tools -----
+
+        new()
+        {
+            Name = "gx_get_structure",
+            WorkerTool = "gx_get_structure",
+            Description = "Devuelve la estructura de una Transaction/SDT/DataSelector como JSON: niveles anidados con sus atributos (nombre, tipo de dato, longitud, decimales, isKey, header). Cada nivel puede contener sub_levels recursivos. Más amigable que leer el XML crudo de gx_read_object.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("Transaction", "SDT", "DataSelector", "DataView", "Table"),
+                    }))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_get_layout",
+            WorkerTool = "gx_get_layout",
+            Description = "Devuelve el Web Form (layout) de un WebPanel o Transaction como árbol JSON. Detecta el formato: 'GXML' (moderno, GX17 U11+ / GX18) o 'KIP' (legacy HTML-like). Incluye lista de control_names y el tree completo con cada elemento como {kind, attributes, text, children}.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("WebPanel", "Transaction"),
+                    }))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_get_variables",
+            WorkerTool = "gx_get_variables",
+            Description = "Devuelve las variables (Variables Part) de un objeto como lista JSON. Cada variable trae id, name, description, data_type decodificado (de AttCustomType), length, decimals, based_on, is_standard, y all_properties con el bag de propiedades crudo.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction"),
+                    }))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        // ----- Phase B2: granular writes on Structure -----
+
+        new()
+        {
+            Name = "gx_add_attribute",
+            WorkerTool = "gx_add_attribute",
+            Description = "Crea un atributo nuevo en la KB y opcionalmente lo asocia a una Transaction existente (root level o sub-level). Especificar exactamente uno: 'data_type' (con length/decimals propios) o 'based_on_domain' (toma el tipo del Domain). Pipeline: export Transaction + modificar Structure XML + agregar Attribute → import UpdatedAndNew. Backup SQL automático antes — restaurable si falla.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre del atributo (regex ^[A-Za-z][A-Za-z0-9_]{0,63}$).", new JsonObject
+                    {
+                        ["pattern"] = "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+                    })),
+                    ("data_type", Prop("string", "Tipo GeneXus. Mutuamente exclusivo con based_on_domain.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean", "bas:BLOB", "bas:Image"),
+                    })),
+                    ("length", Prop("integer", "Longitud (requerido para Numeric/Character/VarChar). Ignorado para Date/DateTime/Boolean.", new JsonObject
+                    {
+                        ["minimum"] = 1,
+                        ["maximum"] = 4000,
+                    })),
+                    ("decimals", Prop("integer", "Decimales (para Numeric). Default 0.", new JsonObject
+                    {
+                        ["minimum"] = 0,
+                        ["maximum"] = 20,
+                    })),
+                    ("description", Prop("string", "Descripción del atributo. Default = name.")),
+                    ("based_on_domain", Prop("string", "Nombre del Domain del que hereda el tipo. Mutuamente exclusivo con data_type.")),
+                    ("transaction", Prop("string", "Si se especifica, el atributo se agrega a la Structure de esa Transaction (UpdatedAndNew). Si se omite, el atributo se crea standalone (OnlyNew).")),
+                    ("level", Prop("string", "Nombre del Level dentro de la Transaction donde insertar el atributo. Default = root level (la propia Transaction). Solo aplica si 'transaction' está presente.")),
+                    ("is_key", Prop("boolean", "Si el atributo es parte de la clave del Level. Default: false.", new JsonObject { ["default"] = false })),
+                    ("autonumber", Prop("boolean", "Si el atributo es autonumérico. Solo aplica a Numeric. Default: false.", new JsonObject { ["default"] = false }))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_remove_attribute",
+            WorkerTool = "gx_remove_attribute",
+            Description = "Desasocia un atributo de una Transaction (quita la referencia en el Level). El atributo permanece en la KB y puede usarse en otras Transactions; para borrarlo completamente llamar después a gx_delete_object con 'Attribute:Name'. Pipeline: export Transaction → quitar la <Attribute> reference → import UpdatedAndNew. ATENCIÓN: si el atributo es key del nivel se reporta en el audit log — el cambio de PK puede tener consecuencias en la BD.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("transaction", Prop("string", "Nombre de la Transaction.")),
+                    ("name", Prop("string", "Nombre del atributo a desasociar.")),
+                    ("level", Prop("string", "Nombre del Level específico donde quitar el atributo. Opcional: si se omite se busca en cualquier Level."))
+                )),
+                ("required", new JsonArray("transaction", "name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_set_attribute_property",
+            WorkerTool = "gx_set_attribute_property",
+            Description = "Modifica una property de un atributo existente. Properties típicamente editables: 'Description', 'Length', 'Decimals', 'ATTCUSTOMTYPE' (cambia tipo: bas:Numeric/bas:VarChar/bas:Date/etc.), 'idBasedOn' (cambia domain: 'Domain:Id'), 'AUTONUMBER', 'ControlType', 'ATT_PICTURE'. Pipeline: export Attribute → patch <Property> → import UpdatedAndNew. La BL de GeneXus valida la consistencia al importar.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre del atributo a modificar.")),
+                    ("property", Prop("string", "Nombre de la property a modificar (ej: 'Description', 'Length', 'Decimals', 'ATTCUSTOMTYPE', 'idBasedOn', 'AUTONUMBER').")),
+                    ("value", Prop("string", "Nuevo valor de la property. Usar '' (string vacío) para limpiar."))
+                )),
+                ("required", new JsonArray("name", "property", "value")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_list_object_parts",
+            WorkerTool = "gx_list_object_parts",
+            Description = "Lista los Parts conocidos de un tipo de objeto GeneXus (Events, Rules, WebForm, Structure, Variables, etc.), indicando cuáles son editables via gx_update_object_code. Útil para descubrir qué se puede modificar antes de intentar el update.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("type", Prop("string", "Tipo de objeto GeneXus.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction", "Domain",
+                                          "DataSelector", "DataView", "SDT", "Query", "Table", "Module",
+                                          "Image", "Theme", "WebTheme", "ExternalObject", "Group", "Category"),
+                    }))
+                )),
+                ("required", new JsonArray("type")),
                 ("additionalProperties", false)
             ),
         },

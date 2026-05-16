@@ -405,6 +405,7 @@ ORDER BY td.trn_pos";
             rows.Add(new AttributeInfo
             {
                 Position = r.GetInt16(0),
+                AttriNum = r.GetInt32(1),
                 Name = r.IsDBNull(2) ? "" : r.GetString(2),
                 Type = KbTypeMap.AttributeTypeName(r.GetInt16(3)),
                 Length = r.IsDBNull(4) ? 0 : r.GetInt32(4),

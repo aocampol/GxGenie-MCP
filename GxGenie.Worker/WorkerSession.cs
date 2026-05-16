@@ -11,6 +11,7 @@ public sealed class WorkerSession
     public WorkerConfig Config { get; }
     public KbRepository Repo { get; private set; } = default!;
     public WriteTools Writes { get; private set; } = default!;
+    public KbInspector Inspector { get; private set; } = default!;
     public IKbSchemaAdapter Schema { get; private set; } = default!;
 
     public WorkerSession(WorkerConfig config)
@@ -34,5 +35,6 @@ public sealed class WorkerSession
         Schema = SchemaAdapters.For(Config.GxVersion);
         Repo = new KbRepository(Config.ConnectionString, Config.KbDirectory, Schema);
         Writes = new WriteTools(Config, Repo);
+        Inspector = new KbInspector(Repo);
     }
 }

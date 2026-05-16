@@ -229,6 +229,75 @@ WorkerResponse Dispatch(WorkerRequest req)
             }).ToList();
             return WorkerResponse.Ok(new { count = items.Count, items, active = session.Config.ActiveKbName }, req.Id);
         }
+        case "gx_list_object_parts":
+        {
+            var type = GetString(p, "type");
+            if (string.IsNullOrEmpty(type)) return WorkerResponse.Fail("Missing 'type'");
+            var data = session.Writes.ListObjectParts(new WriteTools.ListPartsArgs(type!));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_get_structure":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var type = GetString(p, "type");
+            var data = session.Inspector.GetStructure(name!, type);
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_get_layout":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var type = GetString(p, "type");
+            var data = session.Inspector.GetLayout(name!, type);
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_get_variables":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var type = GetString(p, "type");
+            var data = session.Inspector.GetVariables(name!, type);
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_add_attribute":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var args = new WriteTools.AddAttributeArgs(
+                Name: name!,
+                DataType: GetString(p, "data_type"),
+                Length: GetInt(p, "length", -1) >= 0 ? GetInt(p, "length", 0) : (int?)null,
+                Decimals: GetInt(p, "decimals", -1) >= 0 ? GetInt(p, "decimals", 0) : (int?)null,
+                Description: GetString(p, "description"),
+                BasedOnDomain: GetString(p, "based_on_domain"),
+                Transaction: GetString(p, "transaction"),
+                Level: GetString(p, "level"),
+                IsKey: GetBool(p, "is_key", false),
+                Autonumber: GetBool(p, "autonumber", false));
+            var data = session.Writes.AddAttribute(args);
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_remove_attribute":
+        {
+            var trn = GetString(p, "transaction");
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(trn)) return WorkerResponse.Fail("Missing 'transaction'");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var data = session.Writes.RemoveAttribute(new WriteTools.RemoveAttributeArgs(trn!, name!, GetString(p, "level")));
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_set_attribute_property":
+        {
+            var name = GetString(p, "name");
+            var prop = GetString(p, "property");
+            var value = GetString(p, "value");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            if (string.IsNullOrEmpty(prop)) return WorkerResponse.Fail("Missing 'property'");
+            if (value is null) return WorkerResponse.Fail("Missing 'value'");
+            var data = session.Writes.SetAttributeProperty(new WriteTools.SetAttrPropertyArgs(name!, prop!, value));
+            return WorkerResponse.Ok(data, req.Id);
+        }
         default:
             return WorkerResponse.Fail($"Unknown tool: {req.Tool}", req.Id);
     }
