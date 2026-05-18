@@ -91,6 +91,53 @@ de KB, `audit.log` ni `backups/` — eso lo decidís vos.
 
 ---
 
+## Actualizar a una versión nueva
+
+Si ya clonaste el repo y querés traer una versión más nueva, el camino
+rápido es el script incluido:
+
+```powershell
+cd C:\Proyectos\GxGenie
+.\update.ps1
+```
+
+`update.ps1` aborta si encuentra algún `GxGenie.Worker.exe` /
+`GxGenie.Gateway.exe` corriendo (típicamente porque Claude Code tiene el MCP
+cargado), y después hace `git pull` + `dotnet build` para los dos proyectos.
+
+**Equivalente manual** (si preferís correr cada paso):
+
+```powershell
+# 1) Cerrá toda sesión de Claude Code que tenga el MCP cargado — sino el .exe
+#    queda lockeado y el build falla. Verificá con:
+tasklist /FI "IMAGENAME eq GxGenie.Gateway.exe"
+
+# 2) Traer los commits nuevos
+git -C C:\Proyectos\GxGenie pull origin main
+
+# 3) Recompilar Worker y Gateway
+dotnet build C:\Proyectos\GxGenie\GxGenie.Worker\GxGenie.Worker.csproj  -c Release
+dotnet build C:\Proyectos\GxGenie\GxGenie.Gateway\GxGenie.Gateway.csproj -c Release
+
+# 4) Volvé a abrir Claude Code — la próxima llamada a una tool relanza el
+#    Gateway con el binario nuevo.
+```
+
+Revisá **[CHANGELOG.md](CHANGELOG.md)** para ver qué incorpora, remueve o rompe
+cada versión. El registro del MCP (`claude mcp add`) y los archivos
+`config.json` / `.mcp.json` **no** se vuelven a crear entre versiones, salvo
+que el changelog lo aclare explícitamente.
+
+Si `dotnet build` se queja con `error MSB3027` por un archivo en uso, alguna
+ventana de Claude Code todavía tiene el Gateway abierto. Cerrala y reintentá,
+o como último recurso:
+
+```powershell
+taskkill /F /IM GxGenie.Worker.exe /IM GxGenie.Gateway.exe
+```
+
+---
+
 ## Uso
 
 No invocás las tools con slash commands — le hablás a Claude en lenguaje
@@ -127,39 +174,67 @@ la guía completa. Algunos ejemplos rápidos:
 
 ---
 
-## Tools disponibles (13)
+## Tools disponibles (25)
 
-### Lectura (vía SQL directo)
+### Lectura básica (SQL directo)
+
+| Tool                   | Descripción                                                            |
+|------------------------|------------------------------------------------------------------------|
+| `gx_kb_info`           | Versión KB, conteo de objetos por tipo, KB activa, versión de GeneXus  |
+| `gx_list_objects`      | Listar objetos por tipo con filtro de nombre                           |
+| `gx_read_object`       | Source decodificado de cada Part (events, rules, body, structure, …)   |
+| `gx_search`            | Búsqueda por nombre (rápido) o por código (lento pero exhaustivo)      |
+| `gx_list_attributes`   | Atributos de una Transaction con tipo, longitud, PK                    |
+| `gx_list_object_parts` | Listar los Parts de un tipo de objeto, con flag de editabilidad y kind |
+
+### Lectura estructurada (JSON parseado)
 
 | Tool                | Descripción                                                              |
 |---------------------|--------------------------------------------------------------------------|
-| `gx_kb_info`        | Versión KB, conteo de objetos por tipo, KB activa, versión de GeneXus    |
-| `gx_list_objects`   | Listar objetos por tipo con filtro de nombre                             |
-| `gx_read_object`    | Source decodificado (events, rules, body, structure…)                    |
-| `gx_search`         | Búsqueda por nombre (rápido) o por código (lento pero exhaustivo)        |
-| `gx_list_attributes`| Atributos de una Transaction con tipo, longitud, PK                       |
+| `gx_get_structure`  | Estructura de Transaction/SDT/DataSelector como árbol JSON con niveles   |
+| `gx_get_layout`     | Web Form como árbol JSON, autodetectando KIP (legacy) vs GXML (moderno)  |
+| `gx_get_variables`  | Variables con `data_type` decodificado del `AttCustomType`               |
 
-### Escritura (vía MSBuild + tasks de GeneXus)
+### Escritura — objetos y código (MSBuild + tasks de GeneXus)
 
-| Tool                    | Notas                                                                 |
-|-------------------------|-----------------------------------------------------------------------|
-| `gx_export_xpz`         | Exportar objeto(s) a un `.xpz`                                        |
-| `gx_import_xpz`         | Importar un `.xpz`. Backup SQL automático antes                       |
-| `gx_create_procedure`   | Crear un Procedure nuevo (XPZ mínimo en memoria + import)             |
-| `gx_update_object_code` | Actualizar el source de un objeto (hoy sólo Procedure)                |
-| `gx_build_object`       | Especificar + generar un objeto (requiere `AllowBuild=true`)          |
-| `gx_delete_object`      | Borrar un objeto. Backup SQL automático antes                         |
+| Tool                    | Notas                                                                |
+|-------------------------|----------------------------------------------------------------------|
+| `gx_export_xpz`         | Exportar objeto(s) a un `.xpz`                                       |
+| `gx_import_xpz`         | Importar un `.xpz`. Backup SQL automático antes                      |
+| `gx_create_procedure`   | Crear un Procedure nuevo (XPZ mínimo en memoria + import)            |
+| `gx_update_object_code` | Actualizar el source/text de un Part para 15 tipos de objeto (Procedure, WebPanel, Transaction, DataProvider, Domain, SDT, …). Valida editabilidad por Part. |
+| `gx_build_object`       | Especificar + generar un objeto (requiere `AllowBuild=true`)         |
+| `gx_delete_object`      | Borrar un objeto. Backup SQL automático antes                        |
+
+### Escritura — Structure de Transaction (granular)
+
+| Tool                       | Notas                                                              |
+|----------------------------|--------------------------------------------------------------------|
+| `gx_add_attribute`         | Crear atributo y opcionalmente asociarlo a un Level de Transaction. Soporta `data_type` (`bas:Numeric`, `bas:VarChar`, …) o `based_on_domain`. |
+| `gx_remove_attribute`      | Quita la referencia del atributo del Level — el Attribute queda en la KB. |
+| `gx_set_attribute_property`| Modifica cualquier Property de un Attribute existente (`Description`, `Length`, `Decimals`, `ATTCUSTOMTYPE`, `idBasedOn`, `AUTONUMBER`, …) |
+
+### Escritura — Layout del Web Form (granular, principalmente GXML)
+
+| Tool                      | Notas                                                               |
+|---------------------------|---------------------------------------------------------------------|
+| `gx_set_control_property` | Modifica un attribute XML de un control identificado por `controlName` |
+| `gx_add_control`          | Agrega un control nuevo dentro de un parent (por `controlName` o `id`). Whitelist-validated; sólo GXML. |
+| `gx_remove_control`       | Quita un control y sus descendientes. La BL de GeneXus puede rechazar si el resultado queda inválido (ej: `<cell>` vacío); rollback automático del snapshot SQL. |
 
 ### Multi-KB
 
-| Tool            | Descripción                                                            |
-|-----------------|------------------------------------------------------------------------|
-| `gx_list_kbs`   | Listar las KBs del `config.json` e indicar cuál está activa            |
-| `gx_switch_kb`  | Cambiar la KB activa en caliente, sin reiniciar Claude Code            |
+| Tool            | Descripción                                                              |
+|-----------------|--------------------------------------------------------------------------|
+| `gx_list_kbs`   | Listar las KBs del `config.json` e indicar cuál está activa              |
+| `gx_switch_kb`  | Cambiar la KB activa en caliente, sin reiniciar Claude Code              |
 
 > Las tools de escritura requieren `Security.AllowWrite=true` (y
 > `AllowBuild=true` para `gx_build_object`) en `config.json`. Están
 > deshabilitadas por defecto — hay que habilitarlas explícitamente.
+> Cada operación destructiva snapshotea la LocalDB de la KB a un `.bak` bajo
+> `backups/` antes — cualquier Import fallido es restaurable con
+> `RESTORE DATABASE`.
 
 ---
 
@@ -172,7 +247,7 @@ Claude Code (Anthropic)
 GxGenie.Gateway      ← .NET 8 — habla MCP con Claude Code
     │ stdin/stdout JSON (Worker como proceso hijo, long-lived)
     ▼
-GxGenie.Worker       ← .NET 8 — dispatcher de 13 tools, multi-KB
+GxGenie.Worker       ← .NET 8 — dispatcher de 25 tools, multi-KB
     │
     ├── SQL directo (lecturas)          → LocalDB de la KB
     └── MSBuild + Genexus.Tasks.targets → la misma BL canónica
@@ -200,6 +275,8 @@ GxGenie/
 ├── setup.ps1                    ← Instalador idempotente (modos per-KB y global)
 ├── config.multi.example.json    ← Ejemplo de config multi-KB
 ├── config.example.json          ← Ejemplo de config single-KB (legacy)
+├── update.ps1                   ← Script de pull + rebuild para instalaciones existentes
+├── CHANGELOG.md                 ← Notas por release
 ├── README.md / USAGE.md         ← Documentación
 └── LICENSE                      ← MIT
 ```
