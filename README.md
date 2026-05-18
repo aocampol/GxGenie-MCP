@@ -46,7 +46,11 @@ A single command per KB. Re-run for every KB you want to "MCP-enable" —
 
 1. Verify .NET 8 SDK (installs via `winget` if missing).
 2. Build Worker + Gateway in Release mode.
-3. Drop a `.mcp.json` file in the KB folder, pointing at the compiled Gateway.
+3. Drop a `.mcp.json` file in the KB folder, pointing at the compiled Gateway,
+   **with `GXGENIE_ALLOW_WRITE=true` and `GXGENIE_ALLOW_BUILD=true` in its
+   `env` block** so that writes and builds are enabled out of the box. Every
+   destructive op still snapshots the LocalDB to a `.bak` and logs to
+   `audit.log` — the safety net is automatic, not opt-in.
 
 Then to use it:
 
@@ -58,13 +62,25 @@ claude
 The first time Claude Code starts in that folder, it will ask you to approve
 the `genexus` MCP server. Say yes — the decision is remembered per folder.
 
-**Enabling writes / builds** (off by default for safety):
+**Disabling writes** (read-only per-KB install — useful when sharing a KB
+for inspection-only access):
 
 ```powershell
-$env:GXGENIE_ALLOW_WRITE = "true"
-$env:GXGENIE_ALLOW_BUILD = "true"
-claude
+.\setup.ps1 -InstallToKb C:\KB\Gx17U1\SampleKB -ReadOnly
 ```
+
+This emits a `.mcp.json` without the `env` block; the Worker then auto-detects
+the KB by cwd and stays in read-only mode (the original safe default).
+
+**Using a shared `config.json`** (instead of per-KB auto-detect):
+
+```powershell
+.\setup.ps1 -InstallToKb C:\KB\Gx17U1\SampleKB -ConfigPath C:\Proyectos\GxGenie\config.json
+```
+
+Injects `GXGENIE_CONFIG` in the `.mcp.json` `env`, pointing at the explicit
+file. Useful if you maintain Security/backup settings centrally instead of
+per-KB.
 
 ### Global mode (multi-KB)
 

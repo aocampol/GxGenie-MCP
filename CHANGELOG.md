@@ -7,9 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — Phase A + B1 + B2 + B3
+## [Unreleased] — Phase A + B1 + B2 + B3 (plus per-KB write-enabled fix)
 
-12 new MCP tools, no breaking changes to `config.json` or installation flow.
+12 new MCP tools, no breaking changes to `config.json` format. The per-KB
+install (`setup.ps1 -InstallToKb`) now ships writes/builds enabled by default
+(see below).
+
+### Fixed — Per-KB install was silently read-only
+
+The `.mcp.json` that `setup.ps1 -InstallToKb` generated had no `env` block, so
+the Worker entered auto-detect-by-cwd mode (which defaults `AllowWrite=false`
+and `AllowBuild=false`) and **ignored the `Security.AllowWrite=true` set in
+the global `config.json`**. The user-visible symptom was every write tool
+refusing to run with "Write operations are disabled" even after explicitly
+enabling them in `config.json`. The root cause is that Claude Code spawns the
+MCP server with a clean environment, so env vars exported in the user's shell
+don't reach the Worker process — they have to live inside `.mcp.json`.
+
+The fix changes the **default** of `setup.ps1 -InstallToKb`: the generated
+`.mcp.json` now ships with
+```json
+"env": { "GXGENIE_ALLOW_WRITE": "true", "GXGENIE_ALLOW_BUILD": "true" }
+```
+out of the box. The rationale is that the *point* of the MCP is to modify the
+KB, and the safety net (automatic SQL `BACKUP DATABASE` to `.bak` before every
+destructive op + append-only `audit.log`) is already on for every write — so
+"safe by default" doesn't actually require disabling the feature, it requires
+the recovery path to be automatic.
+
+Two new switches restore explicit control:
+
+- **`-ReadOnly`** — emits a `.mcp.json` *without* the `env` block, keeping the
+  Worker in the original read-only mode. Useful for read-only access to a KB
+  that other people share.
+- **`-ConfigPath <file>`** — injects `GXGENIE_CONFIG` into the `env` so the
+  Worker uses the specified `config.json` instead of the per-cwd auto-detect.
+  Useful when you maintain Security/backup settings centrally.
+
+**Action for existing per-KB installs**: re-run `setup.ps1 -InstallToKb <kb>`
+after `git pull` to regenerate the `.mcp.json` with the new default. Or hand-
+edit the existing `.mcp.json` to add the `env` block. No KB data is touched.
+
+The auto-detect-by-cwd behaviour itself in `WorkerConfig.Load` is unchanged
+— it still wins over the repo's `config.json` when there's a `.gxw` in the
+cwd. Changing that priority would break the per-KB isolation principle and
+is intentionally out of scope.
+
+
 
 ### Added — Phase A · Full Part catalog and editability
 

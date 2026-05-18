@@ -54,7 +54,22 @@ param(
     # Claude Code cargue el MCP "genexus" solo cuando se abre en esa carpeta.
     # Si se usa, NO registra globalmente (a menos que también pases -RegisterGlobal).
     [string]$InstallToKb,
-    [switch]$RegisterGlobal
+    [switch]$RegisterGlobal,
+
+    # Modo per-KB: por default el .mcp.json generado habilita writes y builds
+    # (AllowWrite + AllowBuild) — el propósito del MCP es modificar la KB, no
+    # solo leerla. Cada destructive op snapshotea el LocalDB a un .bak antes y
+    # queda registrada en audit.log, así que la red de seguridad existe.
+    # Pasá -ReadOnly si querés instalar el MCP en una KB para sólo inspeccionar
+    # (sin riesgo de modificación ni necesidad de aprobar prompts destructivos).
+    [switch]$ReadOnly,
+
+    # Modo per-KB: opcional. Si se especifica, el .mcp.json va a inyectar
+    # GXGENIE_CONFIG apuntando a este config.json — útil cuando querés que la
+    # KB use settings de Security/backup compartidos en lugar del auto-detect
+    # por carpeta. Si no se especifica, el Worker entra en modo auto-detect
+    # by-cwd (lee la KB de la carpeta donde corre Claude Code).
+    [string]$ConfigPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -382,7 +397,15 @@ function Register-WithClaudeCode {
 }
 
 function Install-McpJsonToKb {
-    param([string]$KbFolder)
+    param(
+        [string]$KbFolder,
+        # Si $true, NO se inyectan GXGENIE_ALLOW_WRITE / GXGENIE_ALLOW_BUILD;
+        # el Worker arranca read-only (el comportamiento "safe by default" original).
+        [bool]$ReadOnly = $false,
+        # Si se pasa, se inyecta GXGENIE_CONFIG apuntando a este archivo.
+        # Útil para que el .mcp.json use un config.json compartido en lugar del auto-detect.
+        [string]$ExplicitConfigPath = ''
+    )
     if (-not (Test-Path $KbFolder)) {
         Write-Log "Carpeta de KB no existe: $KbFolder" 'FAIL'
         return $false
@@ -400,18 +423,45 @@ function Install-McpJsonToKb {
         return $false
     }
 
+    # El env del .mcp.json es CRÍTICO: Claude Code spawnea el MCP server con
+    # environment limpio (no hereda env vars del shell), así que cualquier
+    # configuración que el Worker necesite por env var tiene que vivir acá.
+    # Sin este bloque, el modo auto-detect-by-cwd defaultea a AllowWrite=false
+    # ignorando cualquier config.json global con AllowWrite=true.
+    $envBlock = [ordered]@{}
+    if (-not $ReadOnly) {
+        $envBlock['GXGENIE_ALLOW_WRITE'] = 'true'
+        $envBlock['GXGENIE_ALLOW_BUILD'] = 'true'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitConfigPath)) {
+        $envBlock['GXGENIE_CONFIG'] = $ExplicitConfigPath
+    }
+
+    $genexusEntry = [ordered]@{
+        command = $gatewayExe
+        args = @()
+    }
+    if ($envBlock.Count -gt 0) {
+        $genexusEntry['env'] = $envBlock
+    }
+
     $mcpFile = Join-Path $KbFolder '.mcp.json'
     $mcp = [ordered]@{
         mcpServers = [ordered]@{
-            genexus = [ordered]@{
-                command = $gatewayExe
-                args = @()
-            }
+            genexus = $genexusEntry
         }
     }
     $json = $mcp | ConvertTo-Json -Depth 6
     Set-Content -Path $mcpFile -Value $json -Encoding UTF8
     Write-Log ".mcp.json instalado en $mcpFile" 'OK'
+    if ($ReadOnly) {
+        Write-Log '  Mode: read-only (writes y builds NO habilitados — agregá -ReadOnly:$false o sacá el flag para habilitarlos).' 'INFO'
+    } else {
+        Write-Log '  Mode: write-enabled (GXGENIE_ALLOW_WRITE + GXGENIE_ALLOW_BUILD = true). Cada op destructiva snapshotea LocalDB a .bak antes.' 'INFO'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitConfigPath)) {
+        Write-Log "  Config path explícito: $ExplicitConfigPath" 'INFO'
+    }
     Add-Summary ".mcp.json: $mcpFile"
 
     # Para que el MCP funcione, también necesitamos que GeneXus esté en una ruta detectable.
@@ -578,7 +628,7 @@ if ($InstallToKb) {
     if (-not $SkipBuild) {
         if (-not (Build-Projects)) { Write-Log 'Build falló.' 'FAIL'; return }
     }
-    $ok = Install-McpJsonToKb -KbFolder $InstallToKb
+    $ok = Install-McpJsonToKb -KbFolder $InstallToKb -ReadOnly:$ReadOnly -ExplicitConfigPath $ConfigPath
     if ($ok -and $RegisterGlobal) {
         $gatewayExe = Join-Path $ProjectRoot 'GxGenie.Gateway\bin\Release\net8.0\GxGenie.Gateway.exe'
         Register-WithClaudeCode -GatewayExe $gatewayExe
