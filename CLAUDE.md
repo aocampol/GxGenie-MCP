@@ -207,30 +207,63 @@ claude mcp list
 El Gateway resuelve `config.json` desde `--config`, `$env:GXGENIE_CONFIG`,
 junto al exe, o `../../../../config.json`.
 
-## Estado del proyecto — **COMPLETADO** (Fases 0–4)
+## Estado del proyecto — **v1.0.0 milestone alcanzado** (2026-05-19)
+
+Plan original (Fases 0–4 del CLAUDE.md) + extensión sobre la marcha (Fases A,
+B1, B2, B3) — todo cerrado y validado E2E sobre `GxGenieTest` y casos reales
+sobre `SampleKB` (DemoWebPanel events round-trip con normalización de tokens).
+
+### Plan original (cubierto en commits previos al hilo de Fases A/B)
 - [x] Fase 0: Entorno validado — DLLs en C:\GxSDK17, variables configuradas
 - [x] Fase 1: GxExplorer — prueba de concepto
 - [x] Fase 2: Worker (.NET 8) con 5 tools de lectura vía SQL directo
 - [x] Fase 2.5: Gateway MCP — JSON-RPC manual sobre stdio (sin paquetes externos)
 - [x] Fase 3: 5 tools de escritura (MSBuild + tasks GeneXus + backup + audit)
-- [x] **Fase 4**: Adapter pattern GX17/GX18, multi-KB config, `gx_switch_kb`
-      + `gx_list_kbs`, `setup.ps1` idempotente con `-Uninstall`, `README.md`.
-      Detalle en **FASE4_NOTES.md**.
-- [ ] Fase 3.5 (pendiente): fix `delete_object` post-import, `update_object_code`,
-      `create_transaction`, `add_attribute`
+- [x] **Fase 4**: Adapter pattern GX17/GX18, multi-KB, `gx_switch_kb`, `setup.ps1`.
 
-### Resumen final
-- **13 tools** activas (5 lectura + 6 escritura + 2 multi-KB).
-- **Versiones de GeneXus soportadas**: GX17U1 / GX17U11 (validado E2E),
-  GX18 (adapter preparado, validación pendiente sobre instalación real).
+### Extensión completada en el camino a 1.0.0
+- [x] **Fase A**: catálogo completo de Parts en `XpzPartMap.cs` (17 tipos × ~70 Parts),
+      `gx_update_object_code` extendido a 15 tipos (era Procedure-only),
+      `gx_list_object_parts` para descubrir editables.
+- [x] **Fase B1**: reads estructurados — `gx_get_structure`, `gx_get_layout`
+      (auto-detecta KIP vs GXML), `gx_get_variables`. Nuevo `KbInspector`.
+- [x] **Fase B2**: writes granulares sobre Structure de Transaction —
+      `gx_add_attribute`, `gx_remove_attribute`, `gx_set_attribute_property`.
+- [x] **Fase B3**: writes granulares sobre layout — `gx_set_control_property`,
+      `gx_add_control` (whitelist GXML), `gx_remove_control` (BL puede rechazar
+      si deja cells vacíos; rollback automático del .bak).
+- [x] **Fix per-KB write-enabled by default**: el `.mcp.json` emitido por
+      `setup.ps1 -InstallToKb` ahora trae `env: { GXGENIE_ALLOW_WRITE: "true",
+      GXGENIE_ALLOW_BUILD: "true" }` por defecto. Flags `-ReadOnly` y
+      `-ConfigPath` para opt-out.
+- [x] **Fix tokens `<StructureTypeReference>`**: el blob SQL contiene esos
+      tokens alrededor de `new()` con tipo SDT, MSBuild Export los limpia pero
+      Import los rechaza. `WriteTools.NormalizeXpzForImport` los strippea
+      automáticamente antes de cada Import. Validado contra DemoWebPanel real.
+
+### Resumen final 1.0.0
+- **25 tools activas**: 6 reads básicos + 3 reads estructurados + 6 writes
+  de objetos/source + 3 writes de atributos + 3 writes de layout + 2 multi-KB
+  + 2 utility (list_object_parts, list_kbs).
+- **Versiones GeneXus**: GX17U1 / GX17U11 validados E2E. GX18 con adapter
+  preparado pero **sin validación E2E real**.
 - **Dos modos de instalación**:
   - **Per-KB (recomendado)**: `.\setup.ps1 -InstallToKb C:\KB\<X>` dropea un
-    `.mcp.json` en la carpeta. Claude detecta la KB por cwd via
-    `WorkerConfig.AutoDetectFromDirectory()` — sin `config.json` central.
-  - **Global (legacy)**: `.\setup.ps1` registra un MCP a nivel usuario que
-    usa `config.json` multi-KB (necesario para `gx_switch_kb`).
-- **Limitaciones conocidas**: ver "Limitaciones" en README.md y FASE3_NOTES.md
-  / FASE4_NOTES.md.
+    `.mcp.json` con writes habilitados. Claude detecta la KB por cwd via
+    `WorkerConfig.AutoDetectFromDirectory()`.
+  - **Global**: `.\setup.ps1` registra un MCP a nivel usuario con
+    `config.json` multi-KB (necesario para `gx_switch_kb`).
+- **Update**: `update.ps1` automatiza `git pull` + rebuild para usuarios existentes.
+- **Limitaciones conocidas**: ver `CHANGELOG.md` y `README.md`.
+
+### Pendientes identificados (NO bloqueantes — futuras versiones)
+- [ ] **Variables management**: `gx_remove_variable` + `gx_get_unused_variables`
+      (next session candidate — ver `docs/NEXT_SESSION_PROMPT.md` si existe).
+- [ ] **`gx_create_transaction`** tool dedicada (hoy via `gx_import_xpz` con XPZ a mano).
+- [ ] **Fix `delete_object` post-import** — limitación documentada en README.
+- [ ] **Validación E2E contra GX18 real** — adapter está pero no se probó.
+- [ ] **B4 Pattern-aware** (Work With Plus / K2BTools integration) — requiere
+      resolver bootstrap de SDK in-process. Scope grande, para vNext.
 
 ## Fase 1 — completada (resumen)
 GxExplorer compila con `csc.exe` de .NET Framework 4.8 y corre contra

@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — Phase A + B1 + B2 + B3 (plus per-KB write-enabled fix)
+## [1.0.0] — 2026-05-19 — Phase A + B1 + B2 + B3 stabilised
 
-12 new MCP tools, no breaking changes to `config.json` format. The per-KB
-install (`setup.ps1 -InstallToKb`) now ships writes/builds enabled by default
-(see below).
+First production-ready milestone. 25 MCP tools, multi-KB hot switching,
+write-enabled per-KB by default, recoverable via automatic SQL backup
+before every destructive op. The plan from `CLAUDE.md` Phases 0–4 is
+fully covered; Phases A / B1 / B2 / B3 (read/write granularity over
+Parts, Structure and Layout) were added on top during the road to 1.0.
+
+12 new MCP tools relative to 0.1.0, no breaking changes to `config.json`
+format. The per-KB install (`setup.ps1 -InstallToKb`) now ships
+writes/builds enabled by default (see "Fixed" below).
 
 ### Fixed — Import fails on `<StructureTypeReference>` tokens in events
 
