@@ -13,6 +13,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 install (`setup.ps1 -InstallToKb`) now ships writes/builds enabled by default
 (see below).
 
+### Fixed — Import fails on `<StructureTypeReference>` tokens in events
+
+`gx_import_xpz` (and by extension `gx_update_object_code`, which imports a
+patched XPZ internally) failed with `exit=1` and parser errors like
+`src0059 Expecting 'EndFor'` / `ENDFOR (... Events, Line: 765)` when the XPZ
+contained `new <StructureTypeReference><Type>…</Type><Id>…</Id></StructureTypeReference>()`
+in any text Part. These tokens are how GeneXus stores `new()` with explicit
+SDT type information in the SQL blob — the IDE writes them, MSBuild Export
+strips them on the way out, but MSBuild Import rejects them on the way in.
+
+The asymmetric Export/Import behaviour broke this flow:
+1. User reads a Part via `gx_read_object` — gets text with tokens (SQL direct).
+2. User edits the text (text + tokens still present).
+3. User calls `gx_update_object_code` with the edited text.
+4. The internal Export → patch → Import pipeline writes the edited text
+   (tokens included) into the XPZ and Import dies on the tokens.
+
+**Fix**: `WriteTools.NormalizeXpzForImport` runs over every `<Source>` element
+inside the XPZ right before MSBuild Import. It strips
+`new <StructureTypeReference>…</StructureTypeReference>(` down to `new (`,
+rewrites the XPZ in place, and reports the strip count back to the caller.
+The IDE re-infers the type annotation on next save, so the loss is cosmetic.
+
+Called from `ImportXpz` (covers `gx_import_xpz` and external XPZs), and
+inside the import phase of `UpdateObjectCode` (covers `gx_update_object_code`,
+plus the B3 layout writers `gx_set_control_property` / `gx_add_control` /
+`gx_remove_control` which all flow through it).
+
+The response object now includes a `tokens_stripped` field so the caller
+can see how many tokens were normalised; the audit log includes the same.
+Validated with a synthetic XPZ containing two tokens: pre-call scan finds
+them, post-call scan finds zero, and the source is rewritten to `new (`.
+
 ### Fixed — Per-KB install was silently read-only
 
 The `.mcp.json` that `setup.ps1 -InstallToKb` generated had no `env` block, so

@@ -89,6 +89,15 @@ public sealed class WriteTools
             backupPath = bk.BackupPath;
         }
 
+        // Defensive: strip IDE-only tokens (e.g. <StructureTypeReference>...) from any
+        // textual Part inside the XPZ. The blob persisted in SQL contains these tokens
+        // around `new()` calls with explicit SDT type, but the MSBuild Import parser
+        // doesn't accept them — only MSBuild Export strips them on the way out. So an
+        // XPZ assembled from a SQL-read events Part (e.g. user did gx_read_object,
+        // edited, and re-imported through update_object_code) will fail unless we
+        // sanitise here. See CHANGELOG entry "Fix: strip IDE-only tokens before Import".
+        var tokensStripped = NormalizeXpzForImport(args.XpzPath);
+
         var task = new MsBuildRunner.TaskInvocation("Import", new Dictionary<string, string>
         {
             ["File"] = args.XpzPath,
@@ -100,19 +109,80 @@ public sealed class WriteTools
         var result = _msb.RunInsideKb(new[] { task });
         if (!result.Success)
         {
-            _audit.Write("WRITE", "gx_import_xpz", args.XpzPath, "FAILURE", $"exit={result.ExitCode} backup={backupPath} stdout={Truncate(result.StdOut, 500)}");
+            _audit.Write("WRITE", "gx_import_xpz", args.XpzPath, "FAILURE", $"exit={result.ExitCode} backup={backupPath} tokens_stripped={tokensStripped} stdout={Truncate(result.StdOut, 500)}");
             throw new InvalidOperationException($"Import failed (exit {result.ExitCode}). Backup: {backupPath ?? "(none)"}\n{result.StdOut}\n{result.StdErr}");
         }
 
-        _audit.Write("WRITE", "gx_import_xpz", args.XpzPath, "SUCCESS", $"backup={backupPath} preview={args.PreviewMode}");
+        _audit.Write("WRITE", "gx_import_xpz", args.XpzPath, "SUCCESS", $"backup={backupPath} preview={args.PreviewMode} tokens_stripped={tokensStripped}");
         return new
         {
             success = true,
             xpz_path = args.XpzPath,
             backup_path = backupPath,
             preview = args.PreviewMode,
+            tokens_stripped = tokensStripped,
             log_tail = LastLines(result.StdOut, 12),
         };
+    }
+
+    // Pattern: `new` (case-insensitive) followed by optional whitespace, then
+    // `<StructureTypeReference>...</StructureTypeReference>` (any content),
+    // optional whitespace, then `(`. We replace it with just `new (` so the
+    // parser sees `new()` / `new(args)`. Singleline so '.' matches '\n'.
+    private static readonly Regex StructureTypeReferenceTokenRegex = new(
+        @"\bnew\s*<StructureTypeReference>.*?</StructureTypeReference>\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+    /// <summary>
+    /// Opens the XPZ, scans every <c>&lt;Source&gt;</c> inside any <c>&lt;Part&gt;</c>
+    /// (events, rules, conditions, procedure source, web form, …) and strips
+    /// <c>&lt;StructureTypeReference&gt;</c> tokens that the MSBuild Import parser
+    /// rejects. Rewrites the XPZ in place. Returns the number of token occurrences
+    /// removed across all Parts. Safe on XPZs that have no tokens (returns 0).
+    /// </summary>
+    private static int NormalizeXpzForImport(string xpzPath)
+    {
+        XDocument doc;
+        string innerName;
+        using (var fs = File.OpenRead(xpzPath))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
+        {
+            var entry = zip.Entries.FirstOrDefault(e => e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase));
+            if (entry is null) return 0; // not a recognised XPZ — skip
+            innerName = entry.FullName;
+            using var stream = entry.Open();
+            doc = XDocument.Load(stream);
+        }
+
+        var totalStripped = 0;
+        var modified = false;
+        foreach (var sourceEl in doc.Descendants("Source"))
+        {
+            var oldText = sourceEl.Value;
+            if (string.IsNullOrEmpty(oldText)) continue;
+            if (oldText.IndexOf("StructureTypeReference", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+            var matches = StructureTypeReferenceTokenRegex.Matches(oldText);
+            if (matches.Count == 0) continue;
+            totalStripped += matches.Count;
+
+            var newText = StructureTypeReferenceTokenRegex.Replace(oldText, "new (");
+            sourceEl.RemoveNodes();
+            sourceEl.Add(new XCData(newText));
+            modified = true;
+        }
+
+        if (!modified) return 0;
+
+        File.Delete(xpzPath);
+        using var outFs = new FileStream(xpzPath, FileMode.CreateNew);
+        using var outZip = new ZipArchive(outFs, ZipArchiveMode.Create, leaveOpen: false);
+        var newEntry = outZip.CreateEntry(innerName, CompressionLevel.Optimal);
+        using var ws = newEntry.Open();
+        var settings = new XmlWriterSettings { Encoding = new UTF8Encoding(false), Indent = false, OmitXmlDeclaration = false };
+        using var xw = XmlWriter.Create(ws, settings);
+        doc.Save(xw);
+        return totalStripped;
     }
 
     // -------- gx_build_object --------
@@ -1059,6 +1129,12 @@ public sealed class WriteTools
         }
 
         // 4) Import con UpdatedAndNew (sin backup adicional — ya hicimos el nuestro).
+        // Normalizamos antes de mandarlo a MSBuild: si el caller pasó un new_source que
+        // contiene <StructureTypeReference> (porque lo leyó vía gx_read_object / SQL),
+        // el Import del XPZ patched fallaría con src0059/ENDFOR errors. Quitamos los
+        // tokens — el IDE los re-infiere al guardar.
+        var tokensStripped = NormalizeXpzForImport(xpzPath);
+
         var importTask = new MsBuildRunner.TaskInvocation("Import", new Dictionary<string, string>
         {
             ["File"] = xpzPath,
@@ -1077,13 +1153,14 @@ public sealed class WriteTools
         }
 
         _audit.Write("WRITE", "gx_update_object_code", $"{args.Type}:{args.Name}", "SUCCESS",
-            $"part={partName} bytes={args.NewSource.Length} backup={bk.BackupPath}");
+            $"part={partName} bytes={args.NewSource.Length} backup={bk.BackupPath} tokens_stripped={tokensStripped}");
         return new
         {
             success = true,
             @object = $"{args.Type}:{args.Name}",
             part = partName,
             bytes = args.NewSource.Length,
+            tokens_stripped = tokensStripped,
             backup_path = bk.BackupPath,
             xpz_path = xpzPath,
             log_tail = LastLines(importResult.StdOut, 8),
