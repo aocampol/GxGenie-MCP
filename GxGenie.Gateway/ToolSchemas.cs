@@ -338,6 +338,25 @@ public static class ToolSchemas
             ),
         },
 
+        new()
+        {
+            Name = "gx_get_unused_variables",
+            WorkerTool = "gx_get_unused_variables",
+            Description = "Detecta variables declaradas en el Variables Part que no aparecen referenciadas en ninguna otra Part del mismo objeto (events / rules / conditions / source). Cada variable trae name, data_type, length, referenced (bool), reference_count y is_standard. El campo 'candidates' filtra las no-standard con 0 refs — son las que podrían borrarse con gx_remove_variable. Las StandardVariable (Today, Time, Pgmname, …) se reportan pero nunca aparecen en 'candidates'. CAVEAT: el scan es un regex pragmático sobre el texto plano (&Name + word boundary, case-insensitive), así que referencias dentro de strings literales o comentarios también cuentan — preferí esto como pista, no como respuesta definitiva.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction"),
+                    }))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
         // ----- Phase B2: granular writes on Structure -----
 
         new()
@@ -391,6 +410,25 @@ public static class ToolSchemas
                     ("level", Prop("string", "Nombre del Level específico donde quitar el atributo. Opcional: si se omite se busca en cualquier Level."))
                 )),
                 ("required", new JsonArray("transaction", "name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
+            Name = "gx_remove_variable",
+            WorkerTool = "gx_remove_variable",
+            Description = "Quita una <Variable> del Variables Part de un objeto (Procedure/DataProvider/WebPanel/Transaction). Pre-checks (sin tocar la KB): la variable debe existir, no puede ser StandardVariable y no puede tener referencias en events/rules/conditions/source. Si las validaciones pasan: snapshot SQL automático → Export → quitar <Variable> del XPZ → Import UpdatedAndNew. Restaurable desde el .bak si algo falla.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("object", Prop("string", "Objeto en formato 'Type:Name' (ej: 'Procedure:MiProc').", new JsonObject
+                    {
+                        ["pattern"] = "^(Procedure|DataProvider|WebPanel|Transaction):.+$",
+                    })),
+                    ("name", Prop("string", "Nombre de la variable a quitar (sin el '&' inicial)."))
+                )),
+                ("required", new JsonArray("object", "name")),
                 ("additionalProperties", false)
             ),
         },

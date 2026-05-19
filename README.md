@@ -190,7 +190,7 @@ A few quick examples:
 
 ---
 
-## Available tools (25)
+## Available tools (27)
 
 ### Basic reads (direct SQL)
 
@@ -207,9 +207,10 @@ A few quick examples:
 
 | Tool                 | Description                                                            |
 |----------------------|------------------------------------------------------------------------|
-| `gx_get_structure`   | Transaction/SDT/DataSelector structure as nested JSON levels           |
-| `gx_get_layout`      | Web Form as JSON tree, auto-detecting KIP (legacy) vs GXML (modern)    |
-| `gx_get_variables`   | Variables of any object with `data_type` decoded from `AttCustomType`  |
+| `gx_get_structure`        | Transaction/SDT/DataSelector structure as nested JSON levels           |
+| `gx_get_layout`           | Web Form as JSON tree, auto-detecting KIP (legacy) vs GXML (modern)    |
+| `gx_get_variables`        | Variables of any object with `data_type` decoded from `AttCustomType`  |
+| `gx_get_unused_variables` | Variables not referenced in `events` / `rules` / `conditions` / `source` of the same object. Surfaces removable candidates separately from auto-included `<StandardVariable>` entries. |
 
 ### Writes — objects and source code (MSBuild + GeneXus tasks)
 
@@ -229,6 +230,7 @@ A few quick examples:
 | `gx_add_attribute`         | Create attribute and optionally attach it to a Transaction Level. Supports `data_type` (`bas:Numeric`, `bas:VarChar`, …) or `based_on_domain`. |
 | `gx_remove_attribute`      | Remove the attribute reference from a Transaction Level. The Attribute stays in the KB. |
 | `gx_set_attribute_property`| Patch any Property of an existing Attribute (`Description`, `Length`, `Decimals`, `ATTCUSTOMTYPE`, `idBasedOn`, `AUTONUMBER`, …) |
+| `gx_remove_variable`       | Remove a `<Variable>` from a Procedure/DataProvider/WebPanel/Transaction. Pre-checks reject standards and any variable still referenced in `events`/`rules`/`conditions`/`source`. |
 
 ### Writes — Web Form layout (granular, mostly GXML)
 
@@ -261,7 +263,7 @@ Claude Code (Anthropic)
 GxGenie.Gateway      ← .NET 8 — speaks MCP with Claude Code
     │ stdin/stdout JSON (Worker as child process, long-lived)
     ▼
-GxGenie.Worker       ← .NET 8 — dispatcher for 25 tools, multi-KB
+GxGenie.Worker       ← .NET 8 — dispatcher for 27 tools, multi-KB
     │
     ├── Direct SQL (reads)              → LocalDB hosting the KB
     └── MSBuild + Genexus.Tasks.targets → the same canonical business

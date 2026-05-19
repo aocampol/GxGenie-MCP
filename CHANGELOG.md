@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] — 2026-05-19 — Phase C · Variable management
+
+Two new MCP tools that close the variables-management gap left in 1.0.0:
+`gx_get_variables` could read but there was no way to remove anything.
+Total tool count goes from 25 → 27. No breaking changes.
+
+### Added — `gx_get_unused_variables(name, type?)`
+
+Read-only. Detects variables declared in the Variables Part of a Procedure /
+DataProvider / WebPanel / Transaction that aren't referenced anywhere else in
+the same object. Internally reuses `KbRepository.ReadObject` (so all Parts are
+already decoded) and runs a regex (`&Name` + word-boundary, case-insensitive)
+against each of `events`, `rules`, `conditions`, `source` that the object has.
+
+Response carries one entry per variable with `name`, `data_type`, `length`,
+`referenced` (bool), `reference_count`, `is_standard`, and `references_by_part`
+(map: part → count). A separate `candidates` array surfaces the non-standard
+variables with zero references — the ones that would be safe to remove with
+`gx_remove_variable`. `<StandardVariable>` entries (Today, Time, Pgmname, …)
+are reported under `standard_unused` but never enter `candidates`: they belong
+to the GeneXus runtime and `gx_remove_variable` will reject them anyway.
+
+Caveat documented in the tool description: the regex counts occurrences in
+string literals and comments too, so a variable used only inside `/* &X */`
+will still be reported as "referenced". This is intentional — false-positives
+on the *referenced* side are safer than false-positives on the *unused* side.
+
+### Added — `gx_remove_variable(object, name)`
+
+Removes a single `<Variable>` from the Variables Part of an object. `object`
+is a `Type:Name` string (e.g. `Procedure:MyProc`). Pre-checks (the KB is not
+touched until all of them pass):
+
+1. The variable must exist in the object's Variables Part.
+2. `<StandardVariable>` is rejected with a clear "part of the runtime" message.
+3. The variable must not be referenced — internally calls the same scanner
+   that powers `gx_get_unused_variables` and lists which Parts hit if not.
+
+If pre-checks pass: SQL snapshot via `BackupHelper.Snapshot` →
+MSBuild `Export` to a temp `.xpz` → remove `<Variable Name="X">` from the
+host object's `<Part type="e4c4ade7-…">` block → re-zip →
+`NormalizeXpzForImport` (strips the same `<StructureTypeReference>` tokens
+documented in 1.0.0) → MSBuild `Import` with `ImportType=UpdatedAndNew`.
+
+Response: `{ success, object, name, kb_variable_was_referenced: false,
+tokens_stripped, backup_path, xpz_path, log_tail }`. Every call (success or
+failure) goes to the audit log.
+
+### Validated
+
+Full roundtrip in `GxGenie.Worker/probes/discovery/c-variables-roundtrip.ps1`
+against the `GxGenieTest` KB:
+
+1. Imports `Procedure:C1TestProc` with two user variables (`C1UsedVar` used in
+   `source`, `C1UnusedVar` unused).
+2. `gx_get_unused_variables` reports exactly `C1UnusedVar` under `candidates`;
+   the auto-included standards (`Today`, `Time`, `Pgmname`, `Pgmdesc`, `Page`,
+   `Line`, `Output`) all land under `standard_unused`.
+3. `gx_remove_variable Procedure:C1TestProc C1UnusedVar` succeeds. A re-read
+   confirms only `C1UsedVar` remains among user variables, and the `.bak` is
+   on disk.
+4. `gx_remove_variable Procedure:C1TestProc C1UsedVar` is rejected pre-Import
+   with `Variable '&C1UsedVar' is still referenced (1 time(s)) in: source=1`.
+5. `gx_remove_variable Procedure:C1TestProc Today` is rejected pre-Import
+   with `'&Today' is a StandardVariable … cannot be removed`.
+6. `gx_remove_variable Procedure:C1TestProc C1DoesNotExist` is rejected with
+   an "Available" hint listing the variables that *are* present.
+
+---
+
 ## [1.0.0] — 2026-05-19 — Phase A + B1 + B2 + B3 stabilised
 
 First production-ready milestone. 25 MCP tools, multi-KB hot switching,

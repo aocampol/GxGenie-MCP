@@ -348,4 +348,139 @@ public sealed class KbInspector
     };
 
     private static int? TryInt(string? s) => int.TryParse(s, out var n) ? n : null;
+
+    // ---------------- gx_get_unused_variables ----------------
+
+    /// <summary>
+    /// Result of scanning a single variable inside an object. Shared between
+    /// <see cref="GetUnusedVariables"/> (read tool) and <see cref="WriteTools"/>
+    /// (pre-check before <c>gx_remove_variable</c>).
+    /// </summary>
+    public sealed class VariableScan
+    {
+        public string Name { get; set; } = "";
+        public bool IsStandard { get; set; }
+        public string? DataType { get; set; }
+        public int? Length { get; set; }
+        public int ReferenceCount { get; set; }
+        public Dictionary<string, int> ReferencesByPart { get; set; } = new();
+    }
+
+    // Parts whose text we scan for &<Name> references. Each entry that exists on
+    // the object contributes to the reference count.
+    private static readonly string[] ScannableParts = { "events", "rules", "conditions", "source" };
+
+    /// <summary>
+    /// Reads the object's Variables Part and counts case-insensitive matches of
+    /// <c>&amp;Name</c> in each of the scannable text Parts that the object has.
+    /// Returns the loaded <see cref="ObjectDetail"/> alongside one
+    /// <see cref="VariableScan"/> per <c>&lt;Variable&gt;</c>/<c>&lt;StandardVariable&gt;</c>.
+    /// </summary>
+    public (ObjectDetail Detail, List<VariableScan> Scans, List<string> ScannedParts) ScanVariableReferences(string objectName, string? typeFilter)
+    {
+        var detail = _repo.ReadObject(objectName, typeFilter)
+            ?? throw new ArgumentException($"Object not found: {objectName}");
+
+        var scans = new List<VariableScan>();
+        var present = ScannableParts
+            .Where(p => detail.Parts.TryGetValue(p, out var v) && !string.IsNullOrEmpty(v))
+            .ToList();
+
+        if (!detail.Parts.TryGetValue("variables", out var xml) || string.IsNullOrWhiteSpace(xml))
+            return (detail, scans, present);
+
+        XElement root;
+        try { root = XElement.Parse(StripNullBytes(xml!)); }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Could not parse variables XML for {objectName}: {ex.Message}");
+        }
+
+        foreach (var el in root.Elements())
+        {
+            var isStd = string.Equals(el.Name.LocalName, "StandardVariable", StringComparison.OrdinalIgnoreCase);
+            var isVar = string.Equals(el.Name.LocalName, "Variable", StringComparison.OrdinalIgnoreCase);
+            if (!isStd && !isVar) continue;
+            var name = el.Attribute("Name")?.Value;
+            if (string.IsNullOrEmpty(name)) continue;
+
+            var props = ReadProperties(el);
+            var (dtCode, _, _) = DecodeAttCustomType(props.GetValueOrDefault("ATTCUSTOMTYPE"));
+            int? len = TryInt(props.GetValueOrDefault("Length"));
+
+            // Pattern: literal `&` + variable name + negative lookahead for word char.
+            // Case-insensitive — GeneXus is case-insensitive for identifiers.
+            // Caveat (documented in the tool description): this also counts occurrences
+            // inside string literals and comments. False-positives on 'referenced' are
+            // safer than false-positives on 'unused'.
+            var rx = new Regex(@"&" + Regex.Escape(name!) + @"(?![A-Za-z0-9_])", RegexOptions.IgnoreCase);
+            var byPart = new Dictionary<string, int>();
+            int total = 0;
+            foreach (var p in present)
+            {
+                var text = detail.Parts[p];
+                if (string.IsNullOrEmpty(text)) continue;
+                var c = rx.Matches(text!).Count;
+                if (c > 0) byPart[p] = c;
+                total += c;
+            }
+
+            scans.Add(new VariableScan
+            {
+                Name = name!,
+                IsStandard = isStd,
+                DataType = dtCode is null ? null : DataTypeName(dtCode.Value),
+                Length = len,
+                ReferenceCount = total,
+                ReferencesByPart = byPart,
+            });
+        }
+
+        return (detail, scans, present);
+    }
+
+    /// <summary>
+    /// Detects variables declared in the Variables Part that are not referenced in any
+    /// other Part of the same object (events / rules / conditions / source). Useful
+    /// for cleanup. The reference scan is a pragmatic regex (<c>&amp;Name</c> + word
+    /// boundary, case-insensitive) — it will count occurrences inside string literals
+    /// and comments, so prefer it as a hint rather than a hard answer. Standard
+    /// variables (Today, Time, Pgmname, …) are reported but never listed as
+    /// candidates for deletion: they are part of the GeneXus runtime.
+    /// </summary>
+    public object GetUnusedVariables(string objectName, string? typeFilter)
+    {
+        var (detail, scans, scannedParts) = ScanVariableReferences(objectName, typeFilter);
+
+        var candidates = scans
+            .Where(s => !s.IsStandard && s.ReferenceCount == 0)
+            .Select(s => new { name = s.Name, data_type = s.DataType, length = s.Length })
+            .ToList();
+
+        var standardUnused = scans
+            .Where(s => s.IsStandard && s.ReferenceCount == 0)
+            .Select(s => s.Name)
+            .ToList();
+
+        return new
+        {
+            @object = $"{detail.Type}:{detail.Name}",
+            scanned_parts = scannedParts,
+            total = scans.Count,
+            candidates_count = candidates.Count,
+            candidates,
+            standard_unused = standardUnused,
+            variables = scans.Select(s => new
+            {
+                name = s.Name,
+                data_type = s.DataType,
+                length = s.Length,
+                referenced = s.ReferenceCount > 0,
+                reference_count = s.ReferenceCount,
+                is_standard = s.IsStandard,
+                references_by_part = s.ReferencesByPart,
+            }).ToList(),
+        };
+    }
 }

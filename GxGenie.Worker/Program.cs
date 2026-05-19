@@ -260,6 +260,23 @@ WorkerResponse Dispatch(WorkerRequest req)
             var data = session.Inspector.GetVariables(name!, type);
             return WorkerResponse.Ok(data, req.Id);
         }
+        case "gx_get_unused_variables":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var type = GetString(p, "type");
+            var data = session.Inspector.GetUnusedVariables(name!, type);
+            return WorkerResponse.Ok(data, req.Id);
+        }
+        case "gx_remove_variable":
+        {
+            var obj = GetString(p, "object");
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(obj)) return WorkerResponse.Fail("Missing 'object' (Type:Name)");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var data = session.Writes.RemoveVariable(new WriteTools.RemoveVariableArgs(obj!, name!));
+            return WorkerResponse.Ok(data, req.Id);
+        }
         case "gx_add_attribute":
         {
             var name = GetString(p, "name");

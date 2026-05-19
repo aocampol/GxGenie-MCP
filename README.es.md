@@ -190,7 +190,7 @@ la guía completa. Algunos ejemplos rápidos:
 
 ---
 
-## Tools disponibles (25)
+## Tools disponibles (27)
 
 ### Lectura básica (SQL directo)
 
@@ -207,9 +207,10 @@ la guía completa. Algunos ejemplos rápidos:
 
 | Tool                | Descripción                                                              |
 |---------------------|--------------------------------------------------------------------------|
-| `gx_get_structure`  | Estructura de Transaction/SDT/DataSelector como árbol JSON con niveles   |
-| `gx_get_layout`     | Web Form como árbol JSON, autodetectando KIP (legacy) vs GXML (moderno)  |
-| `gx_get_variables`  | Variables con `data_type` decodificado del `AttCustomType`               |
+| `gx_get_structure`        | Estructura de Transaction/SDT/DataSelector como árbol JSON con niveles   |
+| `gx_get_layout`           | Web Form como árbol JSON, autodetectando KIP (legacy) vs GXML (moderno)  |
+| `gx_get_variables`        | Variables con `data_type` decodificado del `AttCustomType`               |
+| `gx_get_unused_variables` | Variables no referenciadas en `events` / `rules` / `conditions` / `source` del mismo objeto. Separa los candidatos eliminables de las `<StandardVariable>` auto-incluidas. |
 
 ### Escritura — objetos y código (MSBuild + tasks de GeneXus)
 
@@ -229,6 +230,7 @@ la guía completa. Algunos ejemplos rápidos:
 | `gx_add_attribute`         | Crear atributo y opcionalmente asociarlo a un Level de Transaction. Soporta `data_type` (`bas:Numeric`, `bas:VarChar`, …) o `based_on_domain`. |
 | `gx_remove_attribute`      | Quita la referencia del atributo del Level — el Attribute queda en la KB. |
 | `gx_set_attribute_property`| Modifica cualquier Property de un Attribute existente (`Description`, `Length`, `Decimals`, `ATTCUSTOMTYPE`, `idBasedOn`, `AUTONUMBER`, …) |
+| `gx_remove_variable`       | Quita una `<Variable>` de un Procedure/DataProvider/WebPanel/Transaction. Los pre-checks rechazan standards y cualquier variable aún referenciada en `events`/`rules`/`conditions`/`source`. |
 
 ### Escritura — Layout del Web Form (granular, principalmente GXML)
 
@@ -263,7 +265,7 @@ Claude Code (Anthropic)
 GxGenie.Gateway      ← .NET 8 — habla MCP con Claude Code
     │ stdin/stdout JSON (Worker como proceso hijo, long-lived)
     ▼
-GxGenie.Worker       ← .NET 8 — dispatcher de 25 tools, multi-KB
+GxGenie.Worker       ← .NET 8 — dispatcher de 27 tools, multi-KB
     │
     ├── SQL directo (lecturas)          → LocalDB de la KB
     └── MSBuild + Genexus.Tasks.targets → la misma BL canónica

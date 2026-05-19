@@ -947,6 +947,136 @@ public sealed class WriteTools
         };
     }
 
+    // -------- gx_remove_variable --------
+
+    public sealed record RemoveVariableArgs(string Object, string Name);
+
+    private const string VariablesPartGuid = "e4c4ade7-53f0-4a56-bdfd-843735b66f47";
+
+    /// <summary>
+    /// Quita una <c>&lt;Variable&gt;</c> del Variables Part de un objeto. Pre-checks
+    /// (sin tocar la KB): (1) la variable existe; (2) no es una
+    /// <c>&lt;StandardVariable&gt;</c> — esas son parte del runtime de GeneXus y no
+    /// se borran; (3) no aparece en events/rules/conditions/source del mismo objeto.
+    /// Si las validaciones pasan: Snapshot SQL → Export → quitar <c>&lt;Variable&gt;</c>
+    /// del Variables Part del XPZ → NormalizeXpzForImport → Import UpdatedAndNew.
+    /// </summary>
+    public object RemoveVariable(RemoveVariableArgs args)
+    {
+        EnsureWriteAllowed("gx_remove_variable");
+        if (string.IsNullOrWhiteSpace(args.Object)) throw new ArgumentException("'object' is required (format 'Type:Name')");
+        if (string.IsNullOrWhiteSpace(args.Name)) throw new ArgumentException("'name' is required");
+
+        var (objType, objName) = ParseObjectRef(args.Object, "object");
+
+        var inspector = new KbInspector(_repo);
+        var (detail, scans, _) = inspector.ScanVariableReferences(objName, objType);
+
+        var target = scans.FirstOrDefault(s => string.Equals(s.Name, args.Name, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+        {
+            var available = scans.Count == 0 ? "<none>" : string.Join(", ", scans.Select(s => "&" + s.Name));
+            throw new InvalidOperationException(
+                $"Variable '&{args.Name}' not found in {detail.Type}:{detail.Name}. Available: {available}.");
+        }
+
+        if (target.IsStandard)
+            throw new InvalidOperationException(
+                $"'&{target.Name}' is a StandardVariable (Today/Time/Pgmname/…) — part of the GeneXus runtime, cannot be removed.");
+
+        if (target.ReferenceCount > 0)
+        {
+            var where = string.Join(", ", target.ReferencesByPart.Select(kv => $"{kv.Key}={kv.Value}"));
+            throw new InvalidOperationException(
+                $"Variable '&{target.Name}' is still referenced ({target.ReferenceCount} time(s)) in: {where}. " +
+                "Remove or rename those references first, then retry.");
+        }
+
+        var bk = _backup.Snapshot($"remove_var_{SanitizeForFilename(args.Name)}_from_{SanitizeForFilename(objName)}");
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "gxmcp", "rmvar_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var xpzPath = Path.Combine(tempDir, detail.Name + ".xpz");
+
+        // 1) Export the host object.
+        var exportTask = new MsBuildRunner.TaskInvocation("Export", new Dictionary<string, string>
+        {
+            ["File"] = xpzPath,
+            ["Objects"] = $"{detail.Type}:{detail.Name}",
+            ["IncludeChildren"] = "False",
+        });
+        var exportResult = _msb.RunInsideKb(new[] { exportTask }, readOnly: true);
+        if (!exportResult.Success || !File.Exists(xpzPath))
+            throw new InvalidOperationException($"Could not export {detail.Type}:{detail.Name} (exit {exportResult.ExitCode}):\n{exportResult.StdOut}");
+
+        // 2) Load the XPZ
+        XDocument doc;
+        string innerXmlName;
+        using (var fs = File.OpenRead(xpzPath))
+        using (var zip = new ZipArchive(fs, ZipArchiveMode.Read))
+        {
+            var entry = zip.Entries.FirstOrDefault(e => e.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                        ?? throw new InvalidOperationException("Exported xpz has no .xml entry");
+            innerXmlName = entry.FullName;
+            using var stream = entry.Open();
+            doc = XDocument.Load(stream);
+        }
+
+        // 3) Find the host object → Variables Part → target <Variable Name="X">.
+        var hostObj = doc.Descendants("Object").FirstOrDefault(o =>
+            string.Equals(o.Attribute("name")?.Value, detail.Name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Host object '{detail.Name}' not found in exported xpz");
+
+        var variablesPart = hostObj.Elements("Part").FirstOrDefault(p =>
+            string.Equals(p.Attribute("type")?.Value, VariablesPartGuid, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"Object '{detail.Type}:{detail.Name}' has no Variables Part in the export.");
+
+        var varEl = variablesPart.Elements("Variable").FirstOrDefault(v =>
+            string.Equals(v.Attribute("Name")?.Value, target.Name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"Variable '&{target.Name}' is visible in SQL but missing from the export — " +
+                "probably an auto-defined variable that the IDE only materialises in the KB.");
+        varEl.Remove();
+
+        // 4) Re-zip in place.
+        WriteXpzWithDoc(xpzPath, innerXmlName, doc);
+
+        // 5) Normalize tokens then Import UpdatedAndNew.
+        var tokensStripped = NormalizeXpzForImport(xpzPath);
+        var importTask = new MsBuildRunner.TaskInvocation("Import", new Dictionary<string, string>
+        {
+            ["File"] = xpzPath,
+            ["ImportType"] = "UpdatedAndNew",
+            ["AutomaticBackup"] = "False",
+        });
+        var importResult = _msb.RunInsideKb(new[] { importTask });
+        if (!importResult.Success)
+        {
+            _audit.Write("WRITE", "gx_remove_variable", args.Name, "FAILURE",
+                $"exit={importResult.ExitCode} from={detail.Type}:{detail.Name} backup={bk.BackupPath} xpz={xpzPath}");
+            throw new InvalidOperationException(
+                $"Remove variable failed (exit {importResult.ExitCode}). " +
+                $"Restore with: RESTORE DATABASE … FROM DISK='{bk.BackupPath}' WITH REPLACE.\n" +
+                $"XPZ preserved at: {xpzPath}\n{importResult.StdOut}\n{importResult.StdErr}");
+        }
+
+        _audit.Write("WRITE", "gx_remove_variable", args.Name, "SUCCESS",
+            $"from={detail.Type}:{detail.Name} tokens_stripped={tokensStripped} backup={bk.BackupPath}");
+
+        return new
+        {
+            success = true,
+            @object = $"{detail.Type}:{detail.Name}",
+            name = target.Name,
+            kb_variable_was_referenced = false,
+            tokens_stripped = tokensStripped,
+            backup_path = bk.BackupPath,
+            xpz_path = xpzPath,
+            log_tail = LastLines(importResult.StdOut, 8),
+        };
+    }
+
     // -------- gx_set_attribute_property --------
 
     public sealed record SetAttrPropertyArgs(string Name, string Property, string Value);
