@@ -190,7 +190,7 @@ la guía completa. Algunos ejemplos rápidos:
 
 ---
 
-## Tools disponibles (27)
+## Tools disponibles (28)
 
 ### Lectura básica (SQL directo)
 
@@ -219,6 +219,7 @@ la guía completa. Algunos ejemplos rápidos:
 | `gx_export_xpz`         | Exportar objeto(s) a un `.xpz`                                       |
 | `gx_import_xpz`         | Importar un `.xpz`. Backup SQL automático antes                      |
 | `gx_create_procedure`   | Crear un Procedure nuevo (XPZ mínimo en memoria + import)            |
+| `gx_create_transaction` | Crear una Transaction nueva con un nivel raíz y un atributo clave (XPZ mínimo + import). Reusa el atributo clave si ya existe en la KB. |
 | `gx_update_object_code` | Actualizar el source/text de un Part para 15 tipos de objeto (Procedure, WebPanel, Transaction, DataProvider, Domain, SDT, …). Valida editabilidad por Part. |
 | `gx_build_object`       | Especificar + generar un objeto (requiere `AllowBuild=true`)         |
 | `gx_delete_object`      | Borrar un objeto. Backup SQL automático antes                        |
@@ -265,7 +266,7 @@ Claude Code (Anthropic)
 GxGenie.Gateway      ← .NET 8 — habla MCP con Claude Code
     │ stdin/stdout JSON (Worker como proceso hijo, long-lived)
     ▼
-GxGenie.Worker       ← .NET 8 — dispatcher de 27 tools, multi-KB
+GxGenie.Worker       ← .NET 8 — dispatcher de 28 tools, multi-KB
     │
     ├── SQL directo (lecturas)          → LocalDB de la KB
     └── MSBuild + Genexus.Tasks.targets → la misma BL canónica
@@ -317,9 +318,12 @@ de schema con GX17 hasta validar contra una KB GX18 real.
 
 ## Limitaciones conocidas
 
-1. **`gx_delete_object` no encuentra objetos creados con `gx_create_procedure`.**
-   MSBuild devuelve "Procedure X was not found in the KB" aunque la fila exista.
-   Workaround: borrar desde el IDE de GeneXus.
+1. **`gx_delete_object` no encuentra objetos creados con `gx_create_procedure`
+   ni `gx_create_transaction`.** La task MSBuild `DeleteObject` devuelve
+   "X was not found in the KB" aunque la fila exista — los objetos importados
+   con un XPZ mínimo no quedan enganchados en el árbol de módulos que la task
+   recorre. Workaround: borrar desde el IDE de GeneXus, o restaurar el `.bak`
+   SQL que la tool de creación toma automáticamente justo antes del import.
 2. **`gx_create_procedure` no soporta variables ni rules personalizados** —
    el template XPZ los deja vacíos. Workaround: crear el procedure y luego
    editar las parts con un XPZ adicional.

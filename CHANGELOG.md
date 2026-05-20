@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] — 2026-05-20 — `gx_create_transaction`
+
+One new MCP tool that closes the last "create" gap left in 1.1.0: Transactions
+could only be created by hand-assembling an XPZ and calling `gx_import_xpz`.
+Total tool count goes from 27 → 28. No breaking changes.
+
+### Added — `gx_create_transaction(name, description?, key_attribute?, key_data_type?, key_length?, module?)`
+
+Creates a new Transaction with a single root Level and one key Attribute —
+the same ergonomics as `gx_create_procedure`. Internally it materialises a
+minimal XPZ (an `<Object>` of type Transaction with its Structure Part, the
+parallel `<Attributes>` section holding the key Attribute, and the
+`<Dependencies>` the Import task expects) and drives `MSBuild Import` with
+`ImportType=OnlyNew`. A SQL `BACKUP DATABASE` snapshot is taken before the
+import, and every call is recorded in the audit log.
+
+Parameters:
+
+- `name` — Transaction name, regex `^[A-Za-z][A-Za-z0-9_]{0,63}$`.
+- `description` — optional, defaults to `name`.
+- `key_attribute` — name of the key attribute created with the Transaction.
+  Defaults to `<name>Id` (the GeneXus convention).
+- `key_data_type` — one of `bas:Numeric` (default), `bas:Character`,
+  `bas:VarChar`, `bas:Date`, `bas:DateTime`, `bas:Boolean`.
+- `key_length` — defaults to 8 (Numeric) or 40 (Character/VarChar); ignored for
+  the length-less types. Numeric keys are emitted as `AUTONUMBER`.
+- `module` — accepted but ignored for now (same as `gx_create_procedure`).
+
+**Attribute reuse**: if an attribute with the requested `key_attribute` name
+already exists in the KB, `Import OnlyNew` reuses it with its current type —
+it is not overwritten. The response field `key_attribute_reused` (bool) tells
+the caller which happened; pass a different `key_attribute` to force a new one.
+
+Pre-Import validations (the KB is not touched until all pass): the `name` regex,
+`key_data_type` is in the allowed enum, and **no Transaction with that name
+already exists** — without that last check `Import OnlyNew` would "succeed"
+silently without creating anything, which is confusing for the caller.
+
+Sub-levels are out of scope for this version: for a multi-level Transaction,
+create the root with this tool and add sub-levels via `gx_import_xpz`.
+
+### Validated
+
+Full roundtrip in `GxGenie.Worker/probes/discovery/d-create-transaction.ps1`
+against the `GxGenieTest` KB:
+
+1. `gx_create_transaction D1TestTrn` with defaults → `gx_get_structure` shows a
+   root Level with `D1TestTrnId` Numeric 8 flagged KEY; `key_attribute_reused`
+   is `false`.
+2. `gx_create_transaction D1TestTrn` again → rejected pre-Import (already
+   exists), KB unchanged.
+3. `gx_create_transaction D1OtherTrn key_attribute=D1TestTrnId` → success with
+   `key_attribute_reused=true`; the new Transaction references the existing
+   `D1TestTrnId` attribute.
+4. `gx_create_transaction D1WithChar key_attribute=D1WithCharCod
+   key_data_type=bas:Character key_length=10` → structure shows
+   `D1WithCharCod` Character 10 KEY.
+5. `gx_create_transaction ThisHasABadKey$$$` → rejected (name regex mismatch).
+
+The probe is idempotent: it restores the KB from the SQL backup the first
+create takes automatically (see the known limitation below).
+
+### Known limitation
+
+`gx_delete_object` cannot remove a Transaction created by this tool — the
+MSBuild `DeleteObject` task reports "not found" for objects imported through a
+minimal XPZ (the same documented limitation that affects `gx_create_procedure`;
+see README "Known limitations"). To undo a `gx_create_transaction`, restore the
+`.bak` it took before the import, or delete the object from the GeneXus IDE.
+
+---
+
 ## [1.1.0] — 2026-05-19 — Phase C · Variable management
 
 Two new MCP tools that close the variables-management gap left in 1.0.0:

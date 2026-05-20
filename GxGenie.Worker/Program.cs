@@ -189,6 +189,20 @@ WorkerResponse Dispatch(WorkerRequest req)
             var data = session.Writes.CreateProcedure(new WriteTools.CreateProcArgs(name!, description, module, source, null));
             return WorkerResponse.Ok(data, req.Id);
         }
+        case "gx_create_transaction":
+        {
+            var name = GetString(p, "name");
+            if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
+            var args = new WriteTools.CreateTrnArgs(
+                Name: name!,
+                Description: GetString(p, "description"),
+                KeyAttribute: GetString(p, "key_attribute"),
+                KeyDataType: GetString(p, "key_data_type"),
+                KeyLength: GetInt(p, "key_length", -1) >= 0 ? GetInt(p, "key_length", 0) : (int?)null,
+                Module: GetString(p, "module"));
+            var data = session.Writes.CreateTransaction(args);
+            return WorkerResponse.Ok(data, req.Id);
+        }
         case "gx_update_object_code":
         {
             var type = GetString(p, "type");

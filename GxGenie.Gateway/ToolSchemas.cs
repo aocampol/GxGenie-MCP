@@ -255,6 +255,40 @@ public static class ToolSchemas
 
         new()
         {
+            Name = "gx_create_transaction",
+            WorkerTool = "gx_create_transaction",
+            Description = "Crea una Transaction nueva en la KB con un único nivel raíz y un atributo clave. Genera un XPZ mínimo internamente (Object Transaction + Structure Part + sección Attributes + Dependencies) e invoca MSBuild Import con ImportType=OnlyNew. Hace backup SQL automático antes. Rechaza si ya existe una Transaction con ese nombre. IMPORTANTE: si el 'key_attribute' indicado ya existe en la KB se reusa con su tipo actual (no se pisa) — pasá un 'key_attribute' distinto si querés un atributo nuevo; la respuesta trae 'key_attribute_reused' (bool) para saberlo. No soporta sub-niveles: para una Transaction multi-level, creá la raíz con esta tool y luego sumá los sub-levels con gx_import_xpz.",
+            InputSchema = Obj(
+                ("type", "object"),
+                ("properties", Obj(
+                    ("name", Prop("string", "Nombre de la Transaction (regex: ^[A-Za-z][A-Za-z0-9_]{0,63}$).", new JsonObject
+                    {
+                        ["pattern"] = "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+                    })),
+                    ("description", Prop("string", "Descripción de la Transaction (opcional, default = name).")),
+                    ("key_attribute", Prop("string", "Nombre del atributo clave a crear con la Transaction (regex ^[A-Za-z][A-Za-z0-9_]{0,63}$). Default = '<name>Id' (la convención GeneXus). Si ya existe en la KB se reusa con su tipo actual.", new JsonObject
+                    {
+                        ["pattern"] = "^[A-Za-z][A-Za-z0-9_]{0,63}$",
+                    })),
+                    ("key_data_type", Prop("string", "Tipo de dato del atributo clave. Default 'bas:Numeric'. Ignorado si el atributo clave ya existía en la KB.", new JsonObject
+                    {
+                        ["enum"] = EnumOf("bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean"),
+                        ["default"] = "bas:Numeric",
+                    })),
+                    ("key_length", Prop("integer", "Longitud del atributo clave. Default 8 (Numeric) o 40 (Character/VarChar). Ignorado para Date/DateTime/Boolean y si el atributo clave ya existía.", new JsonObject
+                    {
+                        ["minimum"] = 1,
+                        ["maximum"] = 4000,
+                    })),
+                    ("module", Prop("string", "Module/Folder donde ubicar la Transaction. Opcional — actualmente ignorado (queda en raíz)."))
+                )),
+                ("required", new JsonArray("name")),
+                ("additionalProperties", false)
+            ),
+        },
+
+        new()
+        {
             Name = "gx_update_object_code",
             WorkerTool = "gx_update_object_code",
             Description = "Actualiza el código/contenido de un Part de un objeto existente. Tipos editables: Procedure (source/rules/conditions/documentation), DataProvider (source/rules/documentation), WebPanel (events/rules/conditions/webform/documentation), Transaction (events/rules/webform/documentation), Domain (documentation), DataSelector/SDT/Query/DataView/Module/Image/Theme/ExternalObject/Category (documentation). Parts estructurados (Variables, Help, Structure, etc) NO son editables — usa gx_list_object_parts para ver el catálogo. Pipeline: backup SQL → Export → modificar XPZ → Import UpdatedAndNew. Restaurable desde el .bak si algo falla.",

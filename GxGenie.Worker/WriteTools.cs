@@ -305,6 +305,115 @@ public sealed class WriteTools
         };
     }
 
+    // -------- gx_create_transaction --------
+
+    public sealed record CreateTrnArgs(
+        string Name, string? Description, string? KeyAttribute,
+        string? KeyDataType, int? KeyLength, string? Module);
+
+    private static readonly string[] ValidKeyDataTypes =
+    {
+        "bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean",
+    };
+
+    /// <summary>
+    /// Creates a new Transaction via XPZ import — calcado de <see cref="CreateProcedure"/>
+    /// pero con el XPZ de un Object Transaction + Structure Part + sección <c>&lt;Attributes&gt;</c>.
+    /// Crea un único nivel raíz con un atributo clave. Si el atributo clave ya existe en la
+    /// KB, <c>Import OnlyNew</c> lo reusa con su tipo actual (no falla, no lo pisa) — la
+    /// respuesta lo reporta en <c>key_attribute_reused</c>. Rechaza si ya existe una
+    /// Transaction con ese nombre (un <c>OnlyNew</c> silencioso sería confuso para el caller).
+    /// </summary>
+    public object CreateTransaction(CreateTrnArgs args)
+    {
+        EnsureWriteAllowed("gx_create_transaction");
+        if (string.IsNullOrWhiteSpace(args.Name))
+            throw new ArgumentException("'name' is required");
+        if (!Regex.IsMatch(args.Name, @"^[A-Za-z][A-Za-z0-9_]{0,63}$"))
+            throw new ArgumentException("'name' must match ^[A-Za-z][A-Za-z0-9_]{0,63}$");
+
+        // Resolve defaults.
+        var keyAttribute = string.IsNullOrWhiteSpace(args.KeyAttribute)
+            ? args.Name + "Id"
+            : args.KeyAttribute!.Trim();
+        if (!Regex.IsMatch(keyAttribute, @"^[A-Za-z][A-Za-z0-9_]{0,63}$"))
+            throw new ArgumentException("'key_attribute' must match ^[A-Za-z][A-Za-z0-9_]{0,63}$");
+
+        var keyDataType = string.IsNullOrWhiteSpace(args.KeyDataType)
+            ? "bas:Numeric"
+            : args.KeyDataType!.Trim();
+        if (!ValidKeyDataTypes.Contains(keyDataType, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException(
+                $"Invalid 'key_data_type' '{keyDataType}'. Valid: {string.Join(", ", ValidKeyDataTypes)}");
+
+        var description = string.IsNullOrWhiteSpace(args.Description) ? args.Name : args.Description!.Trim();
+
+        // key_length only applies to the sized types; Date/DateTime/Boolean ignore it.
+        var typeHasLength = keyDataType.Equals("bas:Numeric", StringComparison.OrdinalIgnoreCase)
+                         || keyDataType.Equals("bas:Character", StringComparison.OrdinalIgnoreCase)
+                         || keyDataType.Equals("bas:VarChar", StringComparison.OrdinalIgnoreCase);
+        int? keyLength = null;
+        if (typeHasLength)
+            keyLength = args.KeyLength.HasValue && args.KeyLength.Value > 0
+                ? args.KeyLength.Value
+                : (keyDataType.Equals("bas:Numeric", StringComparison.OrdinalIgnoreCase) ? 8 : 40);
+
+        // Reject if a Transaction with this name already exists — Import OnlyNew would
+        // "succeed" silently otherwise, leaving the caller unsure what happened.
+        var existing = _repo.ListObjects("Transaction", args.Name, 1000);
+        if (existing.Any(o => string.Equals(o.Name, args.Name, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                $"Transaction '{args.Name}' already exists in the KB. gx_create_transaction only " +
+                "creates new objects — use gx_add_attribute / gx_update_object_code to modify it.");
+
+        // Was the key Attribute already in the KB? Determines key_attribute_reused. Must run
+        // before the Import, which would create it if it is missing.
+        var keyAttributeReused = _repo.ReadObject(keyAttribute, "Attribute") is not null;
+
+        // Snapshot first so a corrupted import is recoverable.
+        var bk = _backup.Snapshot($"create_trn_{args.Name}");
+
+        // Materialise a tiny XPZ in temp and import it.
+        var tempDir = Path.Combine(Path.GetTempPath(), "gxmcp", "xpz_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var xpzPath = Path.Combine(tempDir, args.Name + ".xpz");
+        var xml = XpzTemplates.TransactionXml(args.Name, description, keyAttribute, keyDataType, keyLength);
+        XpzTemplates.WriteXpz(xpzPath, args.Name + ".xml", xml);
+
+        // Our template carries no IDE-only tokens, but normalise anyway — cheap insurance
+        // if the template ever changes (see NormalizeXpzForImport / CHANGELOG 1.0.0).
+        var tokensStripped = NormalizeXpzForImport(xpzPath);
+
+        var task = new MsBuildRunner.TaskInvocation("Import", new Dictionary<string, string>
+        {
+            ["File"] = xpzPath,
+            ["ImportType"] = "OnlyNew",
+            ["AutomaticBackup"] = "False",
+        });
+
+        var result = _msb.RunInsideKb(new[] { task });
+        if (!result.Success)
+        {
+            _audit.Write("WRITE", "gx_create_transaction", args.Name, "FAILURE",
+                $"exit={result.ExitCode} backup={bk.BackupPath} xpz={xpzPath} stdout={Truncate(result.StdOut, 500)}");
+            throw new InvalidOperationException(
+                $"Create transaction failed (exit {result.ExitCode}). Backup: {bk.BackupPath}\nXPZ kept at: {xpzPath}\n{result.StdOut}\n{result.StdErr}");
+        }
+
+        _audit.Write("WRITE", "gx_create_transaction", args.Name, "SUCCESS",
+            $"key={keyAttribute} type={keyDataType} key_reused={keyAttributeReused} backup={bk.BackupPath} xpz={xpzPath}");
+        return new
+        {
+            success = true,
+            name = args.Name,
+            key_attribute = keyAttribute,
+            key_attribute_reused = keyAttributeReused,
+            backup_path = bk.BackupPath,
+            xpz_path = xpzPath,
+            log_tail = LastLines(result.StdOut, 12),
+        };
+    }
+
     // -------- gx_add_attribute --------
 
     public sealed record AddAttributeArgs(

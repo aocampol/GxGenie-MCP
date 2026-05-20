@@ -242,10 +242,11 @@ sobre `SampleKB` (DemoWebPanel events round-trip con normalización de tokens).
       automáticamente antes de cada Import. Validado contra DemoWebPanel real.
 
 ### Resumen final 1.0.0
-- **27 tools activas**: 6 reads básicos + 4 reads estructurados (incluye
-  `gx_get_unused_variables`) + 6 writes de objetos/source + 3 writes de
-  atributos + 1 write de variables (`gx_remove_variable`) + 3 writes de
-  layout + 2 multi-KB + 2 utility (list_object_parts, list_kbs).
+- **28 tools activas**: 6 reads básicos + 4 reads estructurados (incluye
+  `gx_get_unused_variables`) + 7 writes de objetos/source (incluye
+  `gx_create_transaction`) + 3 writes de atributos + 1 write de variables
+  (`gx_remove_variable`) + 3 writes de layout + 2 multi-KB + 2 utility
+  (list_object_parts, list_kbs).
 - **Versiones GeneXus**: GX17U1 / GX17U11 validados E2E. GX18 con adapter
   preparado pero **sin validación E2E real**.
 - **Dos modos de instalación**:
@@ -260,7 +261,8 @@ sobre `SampleKB` (DemoWebPanel events round-trip con normalización de tokens).
 ### Pendientes identificados (NO bloqueantes — futuras versiones)
 - [x] **Variables management** — `gx_get_unused_variables` + `gx_remove_variable`
       shipped en 1.1.0 (ver `CHANGELOG.md` entrada `[1.1.0]`).
-- [ ] **`gx_create_transaction`** tool dedicada (hoy via `gx_import_xpz` con XPZ a mano).
+- [x] **`gx_create_transaction`** tool dedicada — shipped en 1.2.0 (ver
+      `CHANGELOG.md` entrada `[1.2.0]`). Sub-niveles siguen pendientes para una vNext.
 - [ ] **Fix `delete_object` post-import** — limitación documentada en README.
 - [ ] **Validación E2E contra GX18 real** — adapter está pero no se probó.
 - [ ] **B4 Pattern-aware** (Work With Plus / K2BTools integration) — requiere
