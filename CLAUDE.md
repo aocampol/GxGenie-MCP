@@ -264,10 +264,32 @@ sobre `SampleKB` (DemoWebPanel events round-trip con normalización de tokens).
 - [x] **`gx_create_transaction`** tool dedicada — shipped en 1.2.0; sub-niveles
       anidados (param `levels`, multi-nivel master-detail recursivo) en 1.3.0
       (ver `CHANGELOG.md` entradas `[1.2.0]` y `[1.3.0]`).
-- [ ] **Fix `delete_object` post-import** — limitación documentada en README.
-- [ ] **Validación E2E contra GX18 real** — adapter está pero no se probó.
+- [x] **`gx_delete_object` sobre objetos creados por el MCP** — investigado a
+      fondo (2026-05-20). Causa raíz: el import XPZ no completa de forma confiable
+      el registro a nivel modelo (`ModelEntityVersion`), y la task `DeleteObject`
+      resuelve por ahí. No arreglable en GX17 con esfuerzo razonable → cerrado
+      como **limitación documentada** (ver `docs/DELETE_OBJECT_LIMITATION.md`).
 - [ ] **B4 Pattern-aware** (Work With Plus / K2BTools integration) — requiere
       resolver bootstrap de SDK in-process. Scope grande, para vNext.
+
+### Rumbo del proyecto (definido 2026-05-20)
+
+GeneXus lanzó **"GeneXus for Agents"** (1-abr-2026): un MCP Server oficial + la
+CLI `gxnext`, disponible **solo para GeneXus 18 / GeneXus Next**. Esto define el
+nicho de GxGenie:
+
+- **GeneXus 17 y anteriores** — quedan fuera del soporte oficial de agentes.
+  GxGenie es la única opción y ahí está su valor. **El foco del proyecto se
+  mantiene en GX17.**
+- **GeneXus 18** — ya tiene la solución oficial de GeneXus; no tiene sentido
+  competir. El antiguo pendiente "validar GX18 E2E" queda en suspenso —
+  superado por GeneXus for Agents.
+- **Dirección futura — migración de KBs**: usar el MCP para *preparar* una KB
+  vieja para su migración, e incluso asistir una migración completa (traspaso de
+  objetos de una KB antigua a una nueva, documentando y probando funcionalidad).
+  Migrar apps grandes entre versiones de GeneXus es históricamente costoso y
+  frágil (siempre se rompen cosas); un asistente que automatice traspaso +
+  verificación es un caso de uso de alto valor para el nicho GX17.
 
 ## Fase 1 — completada (resumen)
 GxExplorer compila con `csc.exe` de .NET Framework 4.8 y corre contra

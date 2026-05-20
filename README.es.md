@@ -318,12 +318,19 @@ de schema con GX17 hasta validar contra una KB GX18 real.
 
 ## Limitaciones conocidas
 
-1. **`gx_delete_object` no encuentra objetos creados con `gx_create_procedure`
-   ni `gx_create_transaction`.** La task MSBuild `DeleteObject` devuelve
-   "X was not found in the KB" aunque la fila exista — los objetos importados
-   con un XPZ mínimo no quedan enganchados en el árbol de módulos que la task
-   recorre. Workaround: borrar desde el IDE de GeneXus, o restaurar el `.bak`
-   SQL que la tool de creación toma automáticamente justo antes del import.
+1. **`gx_delete_object` no puede borrar objetos creados con `gx_create_procedure`
+   ni `gx_create_transaction`.** GeneXus registra los objetos en dos niveles: el
+   nivel *diseño* (`Entity`/`EntityVersion`, que usan las lecturas SQL de GxGenie)
+   y el nivel *modelo* (`ModelEntityVersion`). Los objetos creados vía el import
+   XPZ de GxGenie no quedan registrados de forma confiable en el nivel modelo, y
+   la task MSBuild `DeleteObject` resuelve por ahí → reporta "X was not found".
+   Sobre objetos que ya existían en la KB funciona bien. Workaround: borrar desde
+   el IDE de GeneXus, o restaurar el `.bak` SQL que toda tool `gx_create_*` toma
+   automáticamente justo antes del import. La vía de fix oficial
+   (`gxnext` / "GeneXus for Agents", abril 2026) requiere GeneXus 18 / Next —
+   GeneXus 17 no tiene tooling oficial de agentes, que es justamente el nicho
+   que cubre GxGenie. Investigación completa en las notas locales
+   `docs/DELETE_OBJECT_LIMITATION.md`.
 2. **`gx_create_procedure` no soporta variables ni rules personalizados** —
    el template XPZ los deja vacíos. Workaround: crear el procedure y luego
    editar las parts con un XPZ adicional.
