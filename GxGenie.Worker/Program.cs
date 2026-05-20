@@ -199,7 +199,8 @@ WorkerResponse Dispatch(WorkerRequest req)
                 KeyAttribute: GetString(p, "key_attribute"),
                 KeyDataType: GetString(p, "key_data_type"),
                 KeyLength: GetInt(p, "key_length", -1) >= 0 ? GetInt(p, "key_length", 0) : (int?)null,
-                Module: GetString(p, "module"));
+                Module: GetString(p, "module"),
+                Levels: ParseTrnLevels(p));
             var data = session.Writes.CreateTransaction(args);
             return WorkerResponse.Ok(data, req.Id);
         }
@@ -426,6 +427,54 @@ static string[]? GetStringArray(Dictionary<string, object?> p, string key)
             return new[] { je.GetString() ?? "" };
     }
     return null;
+}
+
+// Parse the optional 'levels' tree for gx_create_transaction. Returns null when absent.
+// Lenient by design — structural parsing only; WriteTools.NormalizeLevel does the validation.
+static List<TrnLevelDef>? ParseTrnLevels(Dictionary<string, object?> p)
+{
+    if (!p.TryGetValue("levels", out var raw) || raw is null) return null;
+    if (raw is not JsonElement je || je.ValueKind != JsonValueKind.Array) return null;
+    return ParseTrnLevelArray(je);
+}
+
+static List<TrnLevelDef> ParseTrnLevelArray(JsonElement arr)
+{
+    var levels = new List<TrnLevelDef>();
+    foreach (var el in arr.EnumerateArray())
+    {
+        if (el.ValueKind != JsonValueKind.Object) continue;
+        var name = el.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+            ? (n.GetString() ?? "") : "";
+
+        var attrs = new List<TrnAttrDef>();
+        if (el.TryGetProperty("attributes", out var ja) && ja.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var ae in ja.EnumerateArray())
+            {
+                if (ae.ValueKind != JsonValueKind.Object) continue;
+                var an = ae.TryGetProperty("name", out var x) && x.ValueKind == JsonValueKind.String
+                    ? (x.GetString() ?? "") : "";
+                string? adt = ae.TryGetProperty("data_type", out var dt) && dt.ValueKind == JsonValueKind.String
+                    ? dt.GetString() : null;
+                int? alen = ae.TryGetProperty("length", out var ln) && ln.ValueKind == JsonValueKind.Number
+                            && ln.TryGetInt32(out var lv) ? lv : (int?)null;
+                int? adec = ae.TryGetProperty("decimals", out var dc) && dc.ValueKind == JsonValueKind.Number
+                            && dc.TryGetInt32(out var dv) ? dv : (int?)null;
+                var akey = ae.TryGetProperty("is_key", out var k) &&
+                    (k.ValueKind == JsonValueKind.True ||
+                     (k.ValueKind == JsonValueKind.String && bool.TryParse(k.GetString(), out var kb) && kb));
+                attrs.Add(new TrnAttrDef(an, adt, alen, adec, akey));
+            }
+        }
+
+        var subs = el.TryGetProperty("levels", out var sl) && sl.ValueKind == JsonValueKind.Array
+            ? ParseTrnLevelArray(sl)
+            : new List<TrnLevelDef>();
+
+        levels.Add(new TrnLevelDef(name, attrs, subs));
+    }
+    return levels;
 }
 
 static void PrintUsage()

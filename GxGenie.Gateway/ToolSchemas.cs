@@ -46,6 +46,89 @@ public static class ToolSchemas
         return a;
     }
 
+    private const string GxNamePattern = "^[A-Za-z][A-Za-z0-9_]{0,63}$";
+
+    /// <summary>
+    /// Builds the input schema for <c>gx_create_transaction</c>. Kept as a method (not an inline
+    /// <c>Obj(...)</c>) because the optional <c>levels</c> tree is recursive and is expressed with
+    /// JSON Schema <c>$defs</c> + <c>$ref</c> — a <c>level</c> can contain nested <c>levels</c>.
+    /// </summary>
+    private static JsonObject CreateTransactionInputSchema()
+    {
+        var attribute = Obj(
+            ("type", "object"),
+            ("properties", Obj(
+                ("name", Prop("string", "Nombre del atributo.", new JsonObject { ["pattern"] = GxNamePattern })),
+                ("data_type", Prop("string", "Tipo de dato GeneXus. Default bas:Numeric.", new JsonObject
+                {
+                    ["enum"] = EnumOf("bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean"),
+                    ["default"] = "bas:Numeric",
+                })),
+                ("length", Prop("integer", "Longitud. Default 8 (Numeric) / 40 (Character/VarChar). Ignorado para Date/DateTime/Boolean.", new JsonObject
+                {
+                    ["minimum"] = 1,
+                    ["maximum"] = 4000,
+                })),
+                ("decimals", Prop("integer", "Decimales (solo Numeric). Default 0.", new JsonObject
+                {
+                    ["minimum"] = 0,
+                    ["maximum"] = 20,
+                })),
+                ("is_key", Prop("boolean", "Si el atributo es clave del nivel. Si ningún atributo del nivel se marca, el primero se promueve a clave automáticamente."))
+            )),
+            ("required", new JsonArray("name")),
+            ("additionalProperties", false)
+        );
+
+        var level = Obj(
+            ("type", "object"),
+            ("properties", Obj(
+                ("name", Prop("string", "Nombre del sub-nivel.", new JsonObject { ["pattern"] = GxNamePattern })),
+                ("attributes", Obj(
+                    ("type", "array"),
+                    ("description", "Atributos del nivel. Al menos uno; uno debe ser clave (si ninguno se marca con is_key, el primero pasa a ser clave)."),
+                    ("items", new JsonObject { ["$ref"] = "#/$defs/attribute" }),
+                    ("minItems", 1)
+                )),
+                ("levels", Obj(
+                    ("type", "array"),
+                    ("description", "Sub-niveles anidados recursivamente (misma estructura). Opcional."),
+                    ("items", new JsonObject { ["$ref"] = "#/$defs/level" })
+                ))
+            )),
+            ("required", new JsonArray("name", "attributes")),
+            ("additionalProperties", false)
+        );
+
+        return Obj(
+            ("type", "object"),
+            ("$defs", Obj(("attribute", attribute), ("level", level))),
+            ("properties", Obj(
+                ("name", Prop("string", "Nombre de la Transaction (regex: ^[A-Za-z][A-Za-z0-9_]{0,63}$).", new JsonObject { ["pattern"] = GxNamePattern })),
+                ("description", Prop("string", "Descripción de la Transaction (opcional, default = name).")),
+                ("key_attribute", Prop("string", "Nombre del atributo clave del nivel raíz. Default = '<name>Id' (la convención GeneXus). Si ya existe en la KB se reusa con su tipo actual.", new JsonObject { ["pattern"] = GxNamePattern })),
+                ("key_data_type", Prop("string", "Tipo de dato del atributo clave raíz. Default 'bas:Numeric'. Ignorado si el atributo clave ya existía en la KB.", new JsonObject
+                {
+                    ["enum"] = EnumOf("bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean"),
+                    ["default"] = "bas:Numeric",
+                })),
+                ("key_length", Prop("integer", "Longitud del atributo clave raíz. Default 8 (Numeric) o 40 (Character/VarChar). Ignorado para Date/DateTime/Boolean y si el atributo clave ya existía.", new JsonObject
+                {
+                    ["minimum"] = 1,
+                    ["maximum"] = 4000,
+                })),
+                ("module", Prop("string", "Module/Folder donde ubicar la Transaction. Opcional — actualmente ignorado (queda en raíz).")),
+                ("levels", Obj(
+                    ("type", "array"),
+                    ("description", "Sub-niveles anidados bajo el nivel raíz, para Transactions multi-nivel (master-detail). Cada elemento tiene 'name', 'attributes' y, recursivamente, sus propios 'levels'. Omitir para una Transaction de un solo nivel."),
+                    ("items", new JsonObject { ["$ref"] = "#/$defs/level" })
+                ))
+            )),
+            ("required", new JsonArray("name")),
+            ("additionalProperties", false)
+        );
+    }
+
     // Object types that the Worker recognises (see KbTypeMap.TopLevel).
     private static readonly string[] ObjectTypes =
     {
@@ -257,34 +340,8 @@ public static class ToolSchemas
         {
             Name = "gx_create_transaction",
             WorkerTool = "gx_create_transaction",
-            Description = "Crea una Transaction nueva en la KB con un único nivel raíz y un atributo clave. Genera un XPZ mínimo internamente (Object Transaction + Structure Part + sección Attributes + Dependencies) e invoca MSBuild Import con ImportType=OnlyNew. Hace backup SQL automático antes. Rechaza si ya existe una Transaction con ese nombre. IMPORTANTE: si el 'key_attribute' indicado ya existe en la KB se reusa con su tipo actual (no se pisa) — pasá un 'key_attribute' distinto si querés un atributo nuevo; la respuesta trae 'key_attribute_reused' (bool) para saberlo. No soporta sub-niveles: para una Transaction multi-level, creá la raíz con esta tool y luego sumá los sub-levels con gx_import_xpz.",
-            InputSchema = Obj(
-                ("type", "object"),
-                ("properties", Obj(
-                    ("name", Prop("string", "Nombre de la Transaction (regex: ^[A-Za-z][A-Za-z0-9_]{0,63}$).", new JsonObject
-                    {
-                        ["pattern"] = "^[A-Za-z][A-Za-z0-9_]{0,63}$",
-                    })),
-                    ("description", Prop("string", "Descripción de la Transaction (opcional, default = name).")),
-                    ("key_attribute", Prop("string", "Nombre del atributo clave a crear con la Transaction (regex ^[A-Za-z][A-Za-z0-9_]{0,63}$). Default = '<name>Id' (la convención GeneXus). Si ya existe en la KB se reusa con su tipo actual.", new JsonObject
-                    {
-                        ["pattern"] = "^[A-Za-z][A-Za-z0-9_]{0,63}$",
-                    })),
-                    ("key_data_type", Prop("string", "Tipo de dato del atributo clave. Default 'bas:Numeric'. Ignorado si el atributo clave ya existía en la KB.", new JsonObject
-                    {
-                        ["enum"] = EnumOf("bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean"),
-                        ["default"] = "bas:Numeric",
-                    })),
-                    ("key_length", Prop("integer", "Longitud del atributo clave. Default 8 (Numeric) o 40 (Character/VarChar). Ignorado para Date/DateTime/Boolean y si el atributo clave ya existía.", new JsonObject
-                    {
-                        ["minimum"] = 1,
-                        ["maximum"] = 4000,
-                    })),
-                    ("module", Prop("string", "Module/Folder donde ubicar la Transaction. Opcional — actualmente ignorado (queda en raíz)."))
-                )),
-                ("required", new JsonArray("name")),
-                ("additionalProperties", false)
-            ),
+            Description = "Crea una Transaction nueva en la KB. Genera un XPZ mínimo internamente (Object Transaction + Structure Part + sección Attributes + Dependencies) e invoca MSBuild Import con ImportType=OnlyNew. Hace backup SQL automático antes. Rechaza si ya existe una Transaction con ese nombre. IMPORTANTE: si un atributo indicado (clave raíz o de un sub-nivel) ya existe en la KB se reusa con su tipo actual (no se pisa); la respuesta trae 'key_attribute_reused' (bool) para el atributo clave raíz. Multi-nivel: pasá el array 'levels' con sub-niveles anidados (master-detail, recursivo). El nivel raíz solo lleva el atributo clave — para sumarle más atributos no-clave usá gx_add_attribute después de crear.",
+            InputSchema = CreateTransactionInputSchema(),
         },
 
         new()

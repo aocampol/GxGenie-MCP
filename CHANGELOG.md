@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] — 2026-05-20 — `gx_create_transaction` · multi-level (sub-levels)
+
+`gx_create_transaction` gains an optional `levels` parameter for creating
+multi-level (master-detail) Transactions in a single call. Fully backward
+compatible — omitting `levels` produces the exact same flat single-level
+Transaction as 1.2.0. Tool count stays at 28.
+
+### Added — `levels` parameter on `gx_create_transaction`
+
+`levels` is an array of sub-level definitions nested under the root level, and
+it is **recursive**: every level carries `name`, `attributes`, and optionally
+its own `levels` (so Order → OrderLine → OrderLineSerial works in one call).
+Each attribute has `name`, `data_type` (same `bas:*` enum as the root key),
+`length`, `decimals` and `is_key`.
+
+- Per-attribute defaults mirror the root key: `data_type` → `bas:Numeric`,
+  `length` → 8 (Numeric) / 40 (Character/VarChar), length-less for
+  Date/DateTime/Boolean. Numeric **key** attributes are emitted as AUTONUMBER.
+- Every level needs exactly one key; if the caller flags none with `is_key`,
+  the first attribute of that level is auto-promoted to key.
+- An attribute name already present in the KB is reused (`Import OnlyNew`),
+  same as the root key. The same name used across levels references the one
+  KB attribute (the parallel `<Attributes>` section is de-duplicated by name).
+- The root level still carries only its key attribute — add non-key root
+  attributes with `gx_add_attribute` after creating the Transaction.
+- Validation runs entirely before the SQL snapshot: name regex on every level
+  and attribute, data-type enum, no duplicate attribute within a level, and a
+  nesting-depth cap of 8 levels under the root.
+- The response gains `sub_levels_created` — the recursive count of sub-levels.
+
+### Validated
+
+Full roundtrip in `GxGenie.Worker/probes/discovery/e-multilevel-transaction.ps1`
+against the `GxGenieTest` KB:
+
+1. Two-level `E1Invoice` + `E1InvoiceLine` (3 attributes) — `gx_get_structure`
+   shows the detail level with `E1LineId` KEY, `E1Product` Character 60, `E1Qty`.
+2. Three-level `E2Order` → `E2OrderLine` → `E2OrderLineSerial` — structure nests
+   3 deep, `sub_levels_created` = 2.
+3. A sub-level with no `is_key` flagged — the first attribute is auto-promoted.
+4. Regression — `gx_create_transaction` with no `levels` still yields a flat
+   single-level Transaction (`sub_levels_created` = 0).
+
+The 1.2.0 `d-create-transaction.ps1` probe still passes unchanged.
+
+---
+
 ## [1.2.0] — 2026-05-20 — `gx_create_transaction`
 
 One new MCP tool that closes the last "create" gap left in 1.1.0: Transactions

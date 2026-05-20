@@ -219,7 +219,7 @@ la guía completa. Algunos ejemplos rápidos:
 | `gx_export_xpz`         | Exportar objeto(s) a un `.xpz`                                       |
 | `gx_import_xpz`         | Importar un `.xpz`. Backup SQL automático antes                      |
 | `gx_create_procedure`   | Crear un Procedure nuevo (XPZ mínimo en memoria + import)            |
-| `gx_create_transaction` | Crear una Transaction nueva con un nivel raíz y un atributo clave (XPZ mínimo + import). Reusa el atributo clave si ya existe en la KB. |
+| `gx_create_transaction` | Crear una Transaction nueva — nivel raíz + atributo clave, más sub-niveles anidados opcionales (`levels`, master-detail recursivo). Reusa atributos que ya existen en la KB. |
 | `gx_update_object_code` | Actualizar el source/text de un Part para 15 tipos de objeto (Procedure, WebPanel, Transaction, DataProvider, Domain, SDT, …). Valida editabilidad por Part. |
 | `gx_build_object`       | Especificar + generar un objeto (requiere `AllowBuild=true`)         |
 | `gx_delete_object`      | Borrar un objeto. Backup SQL automático antes                        |

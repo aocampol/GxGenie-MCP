@@ -309,35 +309,101 @@ public sealed class WriteTools
 
     public sealed record CreateTrnArgs(
         string Name, string? Description, string? KeyAttribute,
-        string? KeyDataType, int? KeyLength, string? Module);
+        string? KeyDataType, int? KeyLength, string? Module,
+        IReadOnlyList<TrnLevelDef>? Levels);
 
     private static readonly string[] ValidKeyDataTypes =
     {
         "bas:Numeric", "bas:Character", "bas:VarChar", "bas:Date", "bas:DateTime", "bas:Boolean",
     };
 
+    private const string GxNameRegex = @"^[A-Za-z][A-Za-z0-9_]{0,63}$";
+
+    /// <summary>
+    /// Resolves the length/decimals defaults for a data type: Numeric → length 8, Character/
+    /// VarChar → length 40, Date/DateTime/Boolean → length-less. Decimals only survive for
+    /// Numeric and only when &gt; 0.
+    /// </summary>
+    private static (int? Length, int? Decimals) ResolveTypeSizing(string dataType, int? length, int? decimals)
+    {
+        if (dataType.Equals("bas:Numeric", StringComparison.OrdinalIgnoreCase))
+            return (length is > 0 ? length : 8, decimals is > 0 ? decimals : null);
+        if (dataType.Equals("bas:Character", StringComparison.OrdinalIgnoreCase) ||
+            dataType.Equals("bas:VarChar", StringComparison.OrdinalIgnoreCase))
+            return (length is > 0 ? length : 40, null);
+        return (null, null); // Date / DateTime / Boolean
+    }
+
+    private static int CountLevels(IEnumerable<TrnLevelDef> levels) =>
+        levels.Sum(l => 1 + CountLevels(l.SubLevels));
+
+    /// <summary>
+    /// Validates and normalises one sub-level (recursively): checks the level name and every
+    /// attribute name against <see cref="GxNameRegex"/>, validates each data type, resolves
+    /// length/decimals defaults, and guarantees exactly the keys the caller asked for — if no
+    /// attribute is flagged <c>is_key</c>, the first one is promoted (every level needs a key).
+    /// </summary>
+    private TrnLevelDef NormalizeLevel(TrnLevelDef lvl, int depth)
+    {
+        if (depth > 8)
+            throw new ArgumentException("Level nesting is too deep (max 8 levels under the root).");
+        if (string.IsNullOrWhiteSpace(lvl.Name))
+            throw new ArgumentException("Every level needs a 'name'.");
+        if (!Regex.IsMatch(lvl.Name, GxNameRegex))
+            throw new ArgumentException($"Level name '{lvl.Name}' must match {GxNameRegex}.");
+        if (lvl.Attributes is null || lvl.Attributes.Count == 0)
+            throw new ArgumentException($"Level '{lvl.Name}' must declare at least one attribute.");
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var anyKey = lvl.Attributes.Any(a => a.IsKey);
+        var normAttrs = new List<TrnAttrDef>(lvl.Attributes.Count);
+        for (var i = 0; i < lvl.Attributes.Count; i++)
+        {
+            var a = lvl.Attributes[i];
+            if (string.IsNullOrWhiteSpace(a.Name))
+                throw new ArgumentException($"Level '{lvl.Name}' has an attribute with no name.");
+            if (!Regex.IsMatch(a.Name, GxNameRegex))
+                throw new ArgumentException($"Attribute name '{a.Name}' must match {GxNameRegex}.");
+            if (!seen.Add(a.Name))
+                throw new ArgumentException($"Level '{lvl.Name}' lists attribute '{a.Name}' more than once.");
+            var dt = string.IsNullOrWhiteSpace(a.DataType) ? "bas:Numeric" : a.DataType!.Trim();
+            if (!ValidKeyDataTypes.Contains(dt, StringComparer.OrdinalIgnoreCase))
+                throw new ArgumentException(
+                    $"Attribute '{a.Name}': invalid data_type '{dt}'. Valid: {string.Join(", ", ValidKeyDataTypes)}");
+            var (length, decimals) = ResolveTypeSizing(dt, a.Length, a.Decimals);
+            // No key flagged → promote the first attribute; every Transaction level needs a key.
+            var isKey = a.IsKey || (!anyKey && i == 0);
+            normAttrs.Add(new TrnAttrDef(a.Name, dt, length, decimals, isKey));
+        }
+
+        var normSubs = (lvl.SubLevels ?? (IReadOnlyList<TrnLevelDef>)Array.Empty<TrnLevelDef>())
+            .Select(s => NormalizeLevel(s, depth + 1))
+            .ToList();
+        return new TrnLevelDef(lvl.Name, normAttrs, normSubs);
+    }
+
     /// <summary>
     /// Creates a new Transaction via XPZ import — calcado de <see cref="CreateProcedure"/>
     /// pero con el XPZ de un Object Transaction + Structure Part + sección <c>&lt;Attributes&gt;</c>.
-    /// Crea un único nivel raíz con un atributo clave. Si el atributo clave ya existe en la
-    /// KB, <c>Import OnlyNew</c> lo reusa con su tipo actual (no falla, no lo pisa) — la
-    /// respuesta lo reporta en <c>key_attribute_reused</c>. Rechaza si ya existe una
-    /// Transaction con ese nombre (un <c>OnlyNew</c> silencioso sería confuso para el caller).
+    /// Crea el nivel raíz con un atributo clave y, opcionalmente, sub-niveles anidados
+    /// (<c>args.Levels</c>, recursivo). Si un atributo ya existe en la KB, <c>Import OnlyNew</c>
+    /// lo reusa con su tipo actual (no falla, no lo pisa). Rechaza si ya existe una Transaction
+    /// con ese nombre (un <c>OnlyNew</c> silencioso sería confuso para el caller).
     /// </summary>
     public object CreateTransaction(CreateTrnArgs args)
     {
         EnsureWriteAllowed("gx_create_transaction");
         if (string.IsNullOrWhiteSpace(args.Name))
             throw new ArgumentException("'name' is required");
-        if (!Regex.IsMatch(args.Name, @"^[A-Za-z][A-Za-z0-9_]{0,63}$"))
-            throw new ArgumentException("'name' must match ^[A-Za-z][A-Za-z0-9_]{0,63}$");
+        if (!Regex.IsMatch(args.Name, GxNameRegex))
+            throw new ArgumentException($"'name' must match {GxNameRegex}");
 
-        // Resolve defaults.
+        // Resolve root-level defaults.
         var keyAttribute = string.IsNullOrWhiteSpace(args.KeyAttribute)
             ? args.Name + "Id"
             : args.KeyAttribute!.Trim();
-        if (!Regex.IsMatch(keyAttribute, @"^[A-Za-z][A-Za-z0-9_]{0,63}$"))
-            throw new ArgumentException("'key_attribute' must match ^[A-Za-z][A-Za-z0-9_]{0,63}$");
+        if (!Regex.IsMatch(keyAttribute, GxNameRegex))
+            throw new ArgumentException($"'key_attribute' must match {GxNameRegex}");
 
         var keyDataType = string.IsNullOrWhiteSpace(args.KeyDataType)
             ? "bas:Numeric"
@@ -347,16 +413,12 @@ public sealed class WriteTools
                 $"Invalid 'key_data_type' '{keyDataType}'. Valid: {string.Join(", ", ValidKeyDataTypes)}");
 
         var description = string.IsNullOrWhiteSpace(args.Description) ? args.Name : args.Description!.Trim();
+        var (keyLength, _) = ResolveTypeSizing(keyDataType, args.KeyLength, null);
 
-        // key_length only applies to the sized types; Date/DateTime/Boolean ignore it.
-        var typeHasLength = keyDataType.Equals("bas:Numeric", StringComparison.OrdinalIgnoreCase)
-                         || keyDataType.Equals("bas:Character", StringComparison.OrdinalIgnoreCase)
-                         || keyDataType.Equals("bas:VarChar", StringComparison.OrdinalIgnoreCase);
-        int? keyLength = null;
-        if (typeHasLength)
-            keyLength = args.KeyLength.HasValue && args.KeyLength.Value > 0
-                ? args.KeyLength.Value
-                : (keyDataType.Equals("bas:Numeric", StringComparison.OrdinalIgnoreCase) ? 8 : 40);
+        // Validate + normalise the optional sub-levels before touching the KB.
+        var subLevels = (args.Levels ?? (IReadOnlyList<TrnLevelDef>)Array.Empty<TrnLevelDef>())
+            .Select(l => NormalizeLevel(l, depth: 1))
+            .ToList();
 
         // Reject if a Transaction with this name already exists — Import OnlyNew would
         // "succeed" silently otherwise, leaving the caller unsure what happened.
@@ -377,7 +439,7 @@ public sealed class WriteTools
         var tempDir = Path.Combine(Path.GetTempPath(), "gxmcp", "xpz_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
         var xpzPath = Path.Combine(tempDir, args.Name + ".xpz");
-        var xml = XpzTemplates.TransactionXml(args.Name, description, keyAttribute, keyDataType, keyLength);
+        var xml = XpzTemplates.TransactionXml(args.Name, description, keyAttribute, keyDataType, keyLength, subLevels);
         XpzTemplates.WriteXpz(xpzPath, args.Name + ".xml", xml);
 
         // Our template carries no IDE-only tokens, but normalise anyway — cheap insurance
@@ -392,22 +454,24 @@ public sealed class WriteTools
         });
 
         var result = _msb.RunInsideKb(new[] { task });
+        var levelCount = CountLevels(subLevels);
         if (!result.Success)
         {
             _audit.Write("WRITE", "gx_create_transaction", args.Name, "FAILURE",
-                $"exit={result.ExitCode} backup={bk.BackupPath} xpz={xpzPath} stdout={Truncate(result.StdOut, 500)}");
+                $"exit={result.ExitCode} levels={levelCount} backup={bk.BackupPath} xpz={xpzPath} stdout={Truncate(result.StdOut, 500)}");
             throw new InvalidOperationException(
                 $"Create transaction failed (exit {result.ExitCode}). Backup: {bk.BackupPath}\nXPZ kept at: {xpzPath}\n{result.StdOut}\n{result.StdErr}");
         }
 
         _audit.Write("WRITE", "gx_create_transaction", args.Name, "SUCCESS",
-            $"key={keyAttribute} type={keyDataType} key_reused={keyAttributeReused} backup={bk.BackupPath} xpz={xpzPath}");
+            $"key={keyAttribute} type={keyDataType} key_reused={keyAttributeReused} sub_levels={levelCount} backup={bk.BackupPath} xpz={xpzPath}");
         return new
         {
             success = true,
             name = args.Name,
             key_attribute = keyAttribute,
             key_attribute_reused = keyAttributeReused,
+            sub_levels_created = levelCount,
             backup_path = bk.BackupPath,
             xpz_path = xpzPath,
             log_tail = LastLines(result.StdOut, 12),

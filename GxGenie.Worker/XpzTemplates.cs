@@ -4,6 +4,16 @@ using System.Text;
 
 namespace GxGenie.Worker;
 
+/// <summary>One attribute inside a Transaction level. <see cref="DataType"/> is one of the
+/// <c>bas:*</c> tokens; null/empty is treated as the default (<c>bas:Numeric</c>). For the
+/// length-less types (Date/DateTime/Boolean) <see cref="Length"/>/<see cref="Decimals"/>
+/// are ignored. Records reaching <see cref="XpzTemplates.TransactionXml"/> are expected to be
+/// already normalised by <see cref="WriteTools"/> (defaults resolved, exactly one key).</summary>
+public sealed record TrnAttrDef(string Name, string? DataType, int? Length, int? Decimals, bool IsKey);
+
+/// <summary>One level of a Transaction structure: its own attributes plus nested sub-levels.</summary>
+public sealed record TrnLevelDef(string Name, IReadOnlyList<TrnAttrDef> Attributes, IReadOnlyList<TrnLevelDef> SubLevels);
+
 /// <summary>
 /// Generates minimal XPZ payloads suitable for <c>Import</c>. An XPZ is a single-entry ZIP
 /// containing the export XML. The XML schema was reverse-engineered from a real export of
@@ -81,22 +91,45 @@ internal static class XpzTemplates
     }
 
     /// <summary>
-    /// Build the export XML for a new Transaction: one root <c>&lt;Level&gt;</c> with a single
-    /// key <c>&lt;Attribute&gt;</c>, the key Attribute definition in the parallel
-    /// <c>&lt;Attributes&gt;</c> section, and the <c>&lt;Dependencies&gt;</c> the Import task expects.
-    /// Mirrors the hand-crafted XPZ validated in probes/discovery/b2-roundtrip.ps1.
-    /// <paramref name="keyLength"/> is null for the length-less types (Date/DateTime/Boolean).
-    /// Numeric keys are emitted as AUTONUMBER — the GeneXus convention for a Transaction key.
+    /// Build the export XML for a new Transaction: the root <c>&lt;Level&gt;</c> with its key
+    /// <c>&lt;Attribute&gt;</c> plus any nested sub-levels (recursively), every attribute defined
+    /// once in the parallel <c>&lt;Attributes&gt;</c> section, and the <c>&lt;Dependencies&gt;</c>
+    /// the Import task expects. Mirrors the hand-crafted XPZ validated in
+    /// probes/discovery/b2-roundtrip.ps1. <paramref name="subLevels"/> must already be normalised
+    /// by <see cref="WriteTools"/> (defaults resolved, one key per level). Pass an empty list for
+    /// a flat single-level Transaction. Numeric key attributes are emitted as AUTONUMBER — the
+    /// GeneXus convention for a Transaction key.
     /// </summary>
-    public static string TransactionXml(string name, string description, string keyName, string keyDataType, int? keyLength)
+    public static string TransactionXml(
+        string name, string description, string keyName, string keyDataType, int? keyLength,
+        IReadOnlyList<TrnLevelDef> subLevels)
     {
         var now  = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.0000000Z", CultureInfo.InvariantCulture);
         var trnGuid = Guid.NewGuid().ToString().ToLowerInvariant();
-        var lvlGuid = Guid.NewGuid().ToString().ToLowerInvariant();
-        var keyGuid = Guid.NewGuid().ToString().ToLowerInvariant();
-        var isNumeric = string.Equals(keyDataType, "bas:Numeric", StringComparison.OrdinalIgnoreCase);
         const string zeroGuid = "00000000-0000-0000-0000-000000000000";
         var zeroChecksum = new string('0', 32);
+
+        // The root level is the Transaction itself: its single key attribute + the sub-levels.
+        var root = new TrnLevelDef(
+            name,
+            new[] { new TrnAttrDef(keyName, keyDataType, keyLength, null, IsKey: true) },
+            subLevels);
+
+        // Collect every distinct attribute across all levels (first definition wins) and give
+        // each a stable guid shared between the <Attributes> section and the <Level> refs.
+        var attrOrder = new List<TrnAttrDef>();
+        var attrGuids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        void Collect(TrnLevelDef lvl)
+        {
+            foreach (var a in lvl.Attributes)
+            {
+                if (attrGuids.ContainsKey(a.Name)) continue;
+                attrGuids[a.Name] = Guid.NewGuid().ToString().ToLowerInvariant();
+                attrOrder.Add(a);
+            }
+            foreach (var sub in lvl.SubLevels) Collect(sub);
+        }
+        Collect(root);
 
         var sb = new StringBuilder();
         sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
@@ -116,16 +149,9 @@ internal static class XpzTemplates
             .Append(" type=\"").Append(TypeTransaction).Append('"')
             .Append(" description=\"").Append(XmlEscape(description)).Append("\">\n");
 
-        // Structure Part: one root Level holding the key attribute reference.
+        // Structure Part: the root Level (and its nested sub-levels) holding attribute refs.
         sb.Append("      <Part type=\"").Append(PartTransactionStructure).Append("\">\n");
-        sb.Append("        <Level Name=\"").Append(XmlEscape(name)).Append('"')
-            .Append(" Type=\"").Append(XmlEscape(name)).Append('"')
-            .Append(" Description=\"").Append(XmlEscape(description)).Append('"')
-            .Append(" Guid=\"").Append(lvlGuid).Append("\">\n");
-        sb.Append("          <Properties/>\n");
-        sb.Append("          <Attribute key=\"True\" guid=\"").Append(keyGuid).Append("\">")
-            .Append(XmlEscape(keyName)).Append("</Attribute>\n");
-        sb.Append("        </Level>\n");
+        AppendLevel(sb, root, description, attrGuids, indent: 8);
         sb.Append("        <Properties><Property><Name>IsDefault</Name><Value>False</Value></Property></Properties>\n");
         sb.Append("      </Part>\n");
 
@@ -137,31 +163,11 @@ internal static class XpzTemplates
         sb.Append("    </Object>\n");
         sb.Append("  </Objects>\n");
 
-        // Parallel <Attributes> section: the key Attribute definition. Import OnlyNew
+        // Parallel <Attributes> section: one definition per distinct attribute. Import OnlyNew
         // reuses an attribute that already exists by name (it is skipped, not overwritten).
         sb.Append("  <Attributes>\n");
-        sb.Append("    <Attribute parentGuid=\"").Append(zeroGuid).Append("\" user=\"\"")
-            .Append(" versionDate=\"").Append(now).Append("\" lastUpdate=\"").Append(now).Append('"')
-            .Append(" checksum=\"").Append(zeroChecksum).Append('"')
-            .Append(" fullyQualifiedName=\"").Append(XmlEscape(keyName)).Append('"')
-            .Append(" moduleGuid=\"").Append(zeroGuid).Append('"')
-            .Append(" guid=\"").Append(keyGuid).Append('"')
-            .Append(" name=\"").Append(XmlEscape(keyName)).Append('"')
-            .Append(" description=\"").Append(XmlEscape(keyName)).Append("\">\n");
-        sb.Append("      <Properties>\n");
-        sb.Append("        <Property><Name>Name</Name><Value>").Append(XmlEscape(keyName)).Append("</Value></Property>\n");
-        sb.Append("        <Property><Name>Description</Name><Value>").Append(XmlEscape(keyName)).Append("</Value></Property>\n");
-        sb.Append("        <Property><Name>ATTCUSTOMTYPE</Name><Value>").Append(keyDataType).Append("</Value></Property>\n");
-        if (keyLength.HasValue)
-        {
-            sb.Append("        <Property><Name>Length</Name><Value>").Append(keyLength.Value).Append("</Value></Property>\n");
-            sb.Append("        <Property><Name>AttMaxLen</Name><Value>").Append(keyLength.Value).Append("</Value></Property>\n");
-        }
-        if (isNumeric)
-            sb.Append("        <Property><Name>AUTONUMBER</Name><Value>True</Value></Property>\n");
-        sb.Append("        <Property><Name>IsDefault</Name><Value>False</Value></Property>\n");
-        sb.Append("      </Properties>\n");
-        sb.Append("    </Attribute>\n");
+        foreach (var a in attrOrder)
+            AppendAttributeDef(sb, a, attrGuids[a.Name], now, zeroGuid, zeroChecksum);
         sb.Append("  </Attributes>\n");
 
         sb.Append("  <Dependencies>\n");
@@ -172,6 +178,60 @@ internal static class XpzTemplates
         sb.Append("</ExportFile>\n");
 
         return sb.ToString();
+    }
+
+    /// <summary>Emits a <c>&lt;Level&gt;</c> element and recurses into its sub-levels.</summary>
+    private static void AppendLevel(StringBuilder sb, TrnLevelDef lvl, string description,
+        IReadOnlyDictionary<string, string> attrGuids, int indent)
+    {
+        var pad = new string(' ', indent);
+        var lvlGuid = Guid.NewGuid().ToString().ToLowerInvariant();
+        sb.Append(pad).Append("<Level Name=\"").Append(XmlEscape(lvl.Name)).Append('"')
+            .Append(" Type=\"").Append(XmlEscape(lvl.Name)).Append('"')
+            .Append(" Description=\"").Append(XmlEscape(description)).Append('"')
+            .Append(" Guid=\"").Append(lvlGuid).Append("\">\n");
+        sb.Append(pad).Append("  <Properties/>\n");
+        foreach (var a in lvl.Attributes)
+        {
+            sb.Append(pad).Append("  <Attribute key=\"").Append(a.IsKey ? "True" : "False")
+                .Append("\" guid=\"").Append(attrGuids[a.Name]).Append("\">")
+                .Append(XmlEscape(a.Name)).Append("</Attribute>\n");
+        }
+        foreach (var sub in lvl.SubLevels)
+            AppendLevel(sb, sub, sub.Name, attrGuids, indent + 2);
+        sb.Append(pad).Append("</Level>\n");
+    }
+
+    /// <summary>Emits one <c>&lt;Attribute&gt;</c> definition for the parallel section.</summary>
+    private static void AppendAttributeDef(StringBuilder sb, TrnAttrDef a, string guid,
+        string now, string zeroGuid, string zeroChecksum)
+    {
+        var dataType = string.IsNullOrWhiteSpace(a.DataType) ? "bas:Numeric" : a.DataType!;
+        var isNumeric = string.Equals(dataType, "bas:Numeric", StringComparison.OrdinalIgnoreCase);
+        sb.Append("    <Attribute parentGuid=\"").Append(zeroGuid).Append("\" user=\"\"")
+            .Append(" versionDate=\"").Append(now).Append("\" lastUpdate=\"").Append(now).Append('"')
+            .Append(" checksum=\"").Append(zeroChecksum).Append('"')
+            .Append(" fullyQualifiedName=\"").Append(XmlEscape(a.Name)).Append('"')
+            .Append(" moduleGuid=\"").Append(zeroGuid).Append('"')
+            .Append(" guid=\"").Append(guid).Append('"')
+            .Append(" name=\"").Append(XmlEscape(a.Name)).Append('"')
+            .Append(" description=\"").Append(XmlEscape(a.Name)).Append("\">\n");
+        sb.Append("      <Properties>\n");
+        sb.Append("        <Property><Name>Name</Name><Value>").Append(XmlEscape(a.Name)).Append("</Value></Property>\n");
+        sb.Append("        <Property><Name>Description</Name><Value>").Append(XmlEscape(a.Name)).Append("</Value></Property>\n");
+        sb.Append("        <Property><Name>ATTCUSTOMTYPE</Name><Value>").Append(dataType).Append("</Value></Property>\n");
+        if (a.Length.HasValue)
+        {
+            sb.Append("        <Property><Name>Length</Name><Value>").Append(a.Length.Value).Append("</Value></Property>\n");
+            sb.Append("        <Property><Name>AttMaxLen</Name><Value>").Append(a.Length.Value).Append("</Value></Property>\n");
+        }
+        if (a.Decimals.HasValue && a.Decimals.Value > 0)
+            sb.Append("        <Property><Name>Decimals</Name><Value>").Append(a.Decimals.Value).Append("</Value></Property>\n");
+        if (isNumeric && a.IsKey)
+            sb.Append("        <Property><Name>AUTONUMBER</Name><Value>True</Value></Property>\n");
+        sb.Append("        <Property><Name>IsDefault</Name><Value>False</Value></Property>\n");
+        sb.Append("      </Properties>\n");
+        sb.Append("    </Attribute>\n");
     }
 
     private static void AppendReference(StringBuilder sb, string refType, string id, string name)

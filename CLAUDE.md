@@ -261,8 +261,9 @@ sobre `SampleKB` (DemoWebPanel events round-trip con normalización de tokens).
 ### Pendientes identificados (NO bloqueantes — futuras versiones)
 - [x] **Variables management** — `gx_get_unused_variables` + `gx_remove_variable`
       shipped en 1.1.0 (ver `CHANGELOG.md` entrada `[1.1.0]`).
-- [x] **`gx_create_transaction`** tool dedicada — shipped en 1.2.0 (ver
-      `CHANGELOG.md` entrada `[1.2.0]`). Sub-niveles siguen pendientes para una vNext.
+- [x] **`gx_create_transaction`** tool dedicada — shipped en 1.2.0; sub-niveles
+      anidados (param `levels`, multi-nivel master-detail recursivo) en 1.3.0
+      (ver `CHANGELOG.md` entradas `[1.2.0]` y `[1.3.0]`).
 - [ ] **Fix `delete_object` post-import** — limitación documentada en README.
 - [ ] **Validación E2E contra GX18 real** — adapter está pero no se probó.
 - [ ] **B4 Pattern-aware** (Work With Plus / K2BTools integration) — requiere
