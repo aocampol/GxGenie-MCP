@@ -406,7 +406,7 @@ GUIDs descubiertos y limitaciones en **FASE3_NOTES.md**.
 - Probar contra una install de GX18 y ajustar GUIDs si difieren.
 
 ### KB de prueba para Fase 2
-`C:\KB\Gx17U1\SampleKB\SampleKB.gxw` (138.975 entidades). Si el `.mdf`
+`C:\KB\Gx17U1\SampleKB\SampleKB.gxw` (una KB grande, ~120.000 entidades). Si el `.mdf`
 no está adjuntado al LocalDB:
 ```sql
 CREATE DATABASE GX_KB_SampleKB ON

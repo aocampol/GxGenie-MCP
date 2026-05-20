@@ -162,7 +162,7 @@ la guía completa. Algunos ejemplos rápidos:
 
 ### Inspeccionar la KB
 > **Vos:** ¿Qué objetos hay en la Knowledge Base actual?
-> **Claude:** *[llama a `gx_kb_info`]* SampleKB (GX17), 138.975 entidades. Procedures: 4169, WebPanels: 2373, Transactions: 621, SDTs: 1245...
+> **Claude:** *[llama a `gx_kb_info`]* SampleKB (GX17), ~120.000 entidades. Procedures: ~4.000, WebPanels: ~2.300, Transactions: ~600, SDTs: ~1.200...
 
 ### Leer el source de un objeto
 > **Vos:** Mostrame el source del procedure CalcularTotal.

@@ -162,7 +162,7 @@ A few quick examples:
 
 ### Inspect the KB
 > **You:** What objects are in the current Knowledge Base?
-> **Claude:** *[calls `gx_kb_info`]* SampleKB (GX17), 138,975 entities. Procedures: 4169, WebPanels: 2373, Transactions: 621, SDTs: 1245...
+> **Claude:** *[calls `gx_kb_info`]* SampleKB (GX17), ~120,000 entities. Procedures: ~4,000, WebPanels: ~2,300, Transactions: ~600, SDTs: ~1,200...
 
 ### Read an object's source
 > **You:** Show me the source of procedure CalcularTotal.

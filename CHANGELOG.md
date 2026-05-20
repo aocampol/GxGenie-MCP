@@ -382,9 +382,9 @@ is intentionally out of scope.
 - **Phase A** — round-trip on `WebPanel:RwdRecentLinks` (GxGenieTest):
   read events → append marker → write → re-read finds marker → restore →
   re-read shows byte-exact match (1474 bytes).
-- **Phase B1** — `DemoTransaction` Transaction (SampleKB) returns 2 levels and 14
-  attributes correctly; `DemoWebPanel2` (KIP) and `RwdRecentLinks` (GXML)
-  detected correctly.
+- **Phase B1** — a real two-level Transaction returns its 2 levels and 14
+  attributes correctly; a legacy KIP Web Form and `RwdRecentLinks` (GXML) are
+  both detected correctly.
 - **Phase B2** — synthetic `B2TestTrn` Transaction: add Numeric/VarChar/
   based-on-domain attributes, change `Description` and `Length`, remove an
   attribute, confirm the orphan Attribute is still exportable.
