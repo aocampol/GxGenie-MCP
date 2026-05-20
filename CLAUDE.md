@@ -291,6 +291,19 @@ nicho de GxGenie:
   frágil (siempre se rompen cosas); un asistente que automatice traspaso +
   verificación es un caso de uso de alto valor para el nicho GX17.
 
+### Próximo milestone — suite "Documentación & Specs" (planificado 2026-05-20)
+
+Tres sesiones que habilitan documentar KBs — primer paso hacia el rumbo de
+migración. Plan y prompts detallados en `docs/ROADMAP_DOCUMENTACION.md` y
+`docs/PROMPT_DOC_{1,2,3}_*.md` (notas locales):
+
+1. **`gx_get_references`** — cross-reference de objetos: qué llama a qué
+   (read-only, vía la tabla `ModelCrossReference`). → sugerido `1.4.0`
+2. **Pestaña Documentación** — `gx_get_documentation`, `gx_set_documentation`,
+   `gx_add_modification_note` (con bitácora de modificaciones). → `1.5.0`
+3. **`gx_generate_doc`** — genera documentos de specs (MD/HTML) de un objeto o
+   conjunto, integrando 1 y 2. → `1.6.0`
+
 ## Fase 1 — completada (resumen)
 GxExplorer compila con `csc.exe` de .NET Framework 4.8 y corre contra
 `C:\KB\Gx17U1\SampleKB\SampleKB.gxw`. La app llega a invocar
