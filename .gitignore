@@ -43,3 +43,5 @@ Desktop.ini
 *.swp
 *.tmp
 *.bak
+# git history backup bundles — may contain pre-scrub history; never commit these
+*.bundle
