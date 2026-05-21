@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] — 2026-05-21 — Fix: objects nested in modules/folders were invisible
+
+Bug fix for `docs/MCP-BUG-REPORT-modulos.md`. Catalog tools silently omitted
+every object nested inside a Module, Folder or WorkWithPlus instance — ~1,144
+objects in the `APEX_DESA` KB (480 WebPanels, 235 Procedures, 131 SDTs, 114
+Tables, 114 Transactions, …). No new tool; tool count stays at 28.
+
+### Root cause
+
+Every read query resolved an object's current version by joining
+`EntityVersion` on `Entity.EntityLastVersionId`. For any object (or object
+*part*) nested in a container, that pointer is **stale — off by one ahead** of
+the real `EntityVersion` row, so the inner join produced zero rows and the
+object vanished from `gx_list_objects`, `gx_search` and `gx_read_object`. The
+diagnosis in the bug report ("only objects in sub-modules") was incomplete: the
+offending object was in the root module, and the same staleness hits objects
+under Folders and WorkWithPlus too — it is unrelated to nesting depth.
+
+The authoritative current version lives in `ModelEntityVersion` (the
+design-model pointer, `ModelId = 1`), correct for 100 % of objects and parts.
+
+### Fixed
+
+- New `CurrentVersionJoin` SQL fragment in `KbRepository` resolves the current
+  `EntityVersion` via `ModelEntityVersion`, with a `COALESCE` fallback to
+  `EntityLastVersionId` for the handful of part entities that have no
+  `ModelEntityVersion` row (8 of 91,292 in `APEX_DESA`) — zero regressions.
+- Applied to `gx_list_objects`, `gx_search` (`name` **and** `code`),
+  `gx_read_object` (object resolution **and** each part's version), and the
+  internal name/attribute resolvers. The structured-read tools
+  (`gx_get_structure`, `gx_get_variables`, …) inherit the fix through
+  `KbRepository`.
+- `gx_list_objects` count now matches `gx_kb_info` object counts exactly
+  (previously the list under-reported).
+
+### Added — module path in catalog output
+
+- `gx_list_objects`, `gx_search` and `gx_read_object` now return a `module`
+  field with the dotted GeneXus module namespace of each object (e.g.
+  `"LISAPI.V1"`, `"GeneXus.Common.Notifications"`). Omitted when the object
+  lives directly in the root module. Folders and WorkWithPlus instances are
+  traversed but not part of the namespace. This disambiguates homonym objects
+  living in different modules. Resolution is backed by a lazily-cached
+  container tree built from `ModelEntityVersion`.
+
+### Validated
+
+E2E against the `APEX_DESA` KB (GeneXus 17 U1):
+
+1. The bug report's exact repro — `gx_read_object`, `gx_search`,
+   `gx_list_objects` for `PBuscaServicioDomicilio` — all now succeed.
+2. `gx_list_objects type=Procedure` returns 4,169 (was 3,934) and `WebPanel`
+   2,652 (was 2,172), both matching `gx_kb_info`.
+3. `gx_read_object` on the sub-module object `PLISGuardaFechaPromesa` returns
+   `module = "LISAPI.V1"` with all parts (help/source/rules/variables) decoded.
+4. Regression — previously-visible objects and the `GxGenieTest` KB
+   (list count == sum of `kb_info` counts) unchanged.
+
+---
+
 ## [1.3.0] — 2026-05-20 — `gx_create_transaction` · multi-level (sub-levels)
 
 `gx_create_transaction` gains an optional `levels` parameter for creating

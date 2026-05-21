@@ -62,6 +62,8 @@ public sealed class ObjectDetail
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public string? Description { get; set; }
+    /// <summary>Dotted module path the object lives in (e.g. "LISAPI.V1"); null when in the root module.</summary>
+    public string? Module { get; set; }
     public Dictionary<string, string?> Parts { get; set; } = new();
     public List<AttributeInfo>? Attributes { get; set; }
 }
@@ -88,5 +90,7 @@ public sealed class SearchHit
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
     public int Id { get; set; }
+    /// <summary>Dotted module path the object lives in (e.g. "LISAPI.V1"); null when in the root module.</summary>
+    public string? Module { get; set; }
     public string? Snippet { get; set; }
 }
