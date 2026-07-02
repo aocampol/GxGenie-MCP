@@ -13,7 +13,7 @@ public sealed class McpServer
 {
     private const string ProtocolVersion = "2024-11-05";
     private const string ServerName = "gxmcp";
-    private const string ServerVersion = "0.3.0";
+    private const string ServerVersion = "1.4.0";
 
     private readonly WorkerProxy _worker;
     private readonly TextReader _input;

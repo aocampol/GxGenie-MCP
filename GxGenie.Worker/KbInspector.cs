@@ -25,9 +25,9 @@ public sealed class KbInspector
     /// nested levels each with attributes and sub-levels. Attribute type/length data
     /// is enriched from the ATTRIBUTE table when available.
     /// </summary>
-    public object GetStructure(string objectName, string? typeFilter)
+    public object GetStructure(string objectName, string? typeFilter, string? module = null)
     {
-        var detail = _repo.ReadObject(objectName, typeFilter)
+        var detail = _repo.ReadObject(objectName, typeFilter, module)
             ?? throw new ArgumentException($"Object not found: {objectName}");
 
         if (!detail.Parts.TryGetValue("structure", out var xml) || string.IsNullOrWhiteSpace(xml))
@@ -136,9 +136,9 @@ public sealed class KbInspector
     /// Detects whether the underlying format is KIP (legacy HTML-like) or GXML
     /// (modern abstract layout) by inspecting the root element name.
     /// </summary>
-    public object GetLayout(string objectName, string? typeFilter)
+    public object GetLayout(string objectName, string? typeFilter, string? module = null)
     {
-        var detail = _repo.ReadObject(objectName, typeFilter)
+        var detail = _repo.ReadObject(objectName, typeFilter, module)
             ?? throw new ArgumentException($"Object not found: {objectName}");
 
         if (!detail.Parts.TryGetValue("webform", out var xml) || string.IsNullOrWhiteSpace(xml))
@@ -217,9 +217,9 @@ public sealed class KbInspector
     /// id, name, description, data type (decoded from AttCustomType), length, decimals,
     /// based-on attribute reference, and the raw property bag for power users.
     /// </summary>
-    public object GetVariables(string objectName, string? typeFilter)
+    public object GetVariables(string objectName, string? typeFilter, string? module = null)
     {
-        var detail = _repo.ReadObject(objectName, typeFilter)
+        var detail = _repo.ReadObject(objectName, typeFilter, module)
             ?? throw new ArgumentException($"Object not found: {objectName}");
 
         if (!detail.Parts.TryGetValue("variables", out var xml) || string.IsNullOrWhiteSpace(xml))
@@ -376,9 +376,9 @@ public sealed class KbInspector
     /// Returns the loaded <see cref="ObjectDetail"/> alongside one
     /// <see cref="VariableScan"/> per <c>&lt;Variable&gt;</c>/<c>&lt;StandardVariable&gt;</c>.
     /// </summary>
-    public (ObjectDetail Detail, List<VariableScan> Scans, List<string> ScannedParts) ScanVariableReferences(string objectName, string? typeFilter)
+    public (ObjectDetail Detail, List<VariableScan> Scans, List<string> ScannedParts) ScanVariableReferences(string objectName, string? typeFilter, string? module = null)
     {
-        var detail = _repo.ReadObject(objectName, typeFilter)
+        var detail = _repo.ReadObject(objectName, typeFilter, module)
             ?? throw new ArgumentException($"Object not found: {objectName}");
 
         var scans = new List<VariableScan>();
@@ -449,9 +449,9 @@ public sealed class KbInspector
     /// variables (Today, Time, Pgmname, …) are reported but never listed as
     /// candidates for deletion: they are part of the GeneXus runtime.
     /// </summary>
-    public object GetUnusedVariables(string objectName, string? typeFilter)
+    public object GetUnusedVariables(string objectName, string? typeFilter, string? module = null)
     {
-        var (detail, scans, scannedParts) = ScanVariableReferences(objectName, typeFilter);
+        var (detail, scans, scannedParts) = ScanVariableReferences(objectName, typeFilter, module);
 
         var candidates = scans
             .Where(s => !s.IsStandard && s.ReferenceCount == 0)

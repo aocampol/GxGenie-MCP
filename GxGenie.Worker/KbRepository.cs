@@ -330,13 +330,13 @@ ORDER BY ev.EntityVersionName";
 
     // ---------- Read ----------
 
-    public ObjectDetail? ReadObject(string name, string? type)
+    public ObjectDetail? ReadObject(string name, string? type, string? module = null)
     {
         using var conn = Open();
         EnsureTypeMap(conn);
         EnsureContainerTree(conn);
 
-        var (typeId, entityId, versionId, versionName, versionDesc, parentType, parentId) = FindEntity(conn, name, type);
+        var (typeId, entityId, versionId, versionName, versionDesc, parentType, parentId) = FindEntity(conn, name, type, module);
         if (entityId < 0) return null;
 
         var detail = new ObjectDetail
@@ -395,18 +395,21 @@ WHERE c.CompoundEntityTypeId = @t
 
     // ---------- Search ----------
 
-    public List<SearchHit> Search(string query, string searchIn, int limit)
+    public List<SearchHit> Search(string query, string searchIn, int limit, string? typeFilter = null, string? module = null)
     {
         using var conn = Open();
         EnsureTypeMap(conn);
         EnsureContainerTree(conn);
         var hits = new List<SearchHit>();
-        var typesCsv = TopLevelTypesCsv();
+
+        var wantedTypes = ResolveTypes(typeFilter);
+        if (wantedTypes.Count == 0) return hits;
+        var typesCsv = string.Join(",", wantedTypes);
 
         if (searchIn == "name" || searchIn == "both")
         {
             const string sql = @"
-SELECT TOP (@lim) e.EntityTypeId, e.EntityId, ev.EntityVersionName,
+SELECT e.EntityTypeId, e.EntityId, ev.EntityVersionName,
        mev.ModelParentEntityTypeId, mev.ModelParentEntityId
 FROM Entity e" + CurrentVersionJoin + @"
 WHERE e.EntityTypeId IN (SELECT CAST(value AS int) FROM STRING_SPLIT(@types, ','))
@@ -414,40 +417,44 @@ WHERE e.EntityTypeId IN (SELECT CAST(value AS int) FROM STRING_SPLIT(@types, ','
 ORDER BY ev.EntityVersionName";
 
             using var cmd = new SqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("@lim", limit);
             cmd.Parameters.AddWithValue("@types", typesCsv);
             cmd.Parameters.AddWithValue("@q", ToLikePattern(query));
             using var r = cmd.ExecuteReader();
-            while (r.Read())
+            while (r.Read() && hits.Count < limit)
             {
                 int parentType = r.IsDBNull(3) ? 0 : r.GetInt32(3);
                 int parentId = r.IsDBNull(4) ? 0 : r.GetInt32(4);
+                var modulePath = ResolveModulePath(parentType, parentId);
+                if (module is not null && !ModuleMatches(modulePath, module)) continue;
                 hits.Add(new SearchHit
                 {
                     Id = r.GetInt32(1),
                     Name = r.IsDBNull(2) ? "" : r.GetString(2),
                     Type = _topLevelById!.GetValueOrDefault(r.GetInt32(0), "?"),
-                    Module = ResolveModulePath(parentType, parentId),
+                    Module = modulePath,
                 });
             }
         }
 
-        if (searchIn == "code" || searchIn == "both")
+        if ((searchIn == "code" || searchIn == "both") && hits.Count < limit)
         {
-            int budget = Math.Max(0, limit - hits.Count);
-            if (budget > 0)
-            {
-                // Resolve part type IDs for source-bearing parts. Names come from
-                // PartNameAliases above; we filter to the ones that hold text source.
-                var sourceTypeIds = _partTypeKeyById!
-                    .Where(kv => kv.Value is "source" or "rules" or "events" or "conditions")
-                    .Select(kv => kv.Key)
-                    .ToList();
-                if (sourceTypeIds.Count == 0) return hits;
-                var sourceIdsCsv = string.Join(",", sourceTypeIds);
+            // Resolve part type IDs for source-bearing parts. Names come from
+            // PartNameAliases above; we filter to the ones that hold text source.
+            var sourceTypeIds = _partTypeKeyById!
+                .Where(kv => kv.Value is "source" or "rules" or "events" or "conditions")
+                .Select(kv => kv.Key)
+                .ToList();
+            if (sourceTypeIds.Count == 0) return hits;
+            var sourceIdsCsv = string.Join(",", sourceTypeIds);
 
-                var sql = $@"
-SELECT TOP (@scan) c.CompoundEntityTypeId, c.CompoundEntityId, ev.EntityVersionData
+            // No TOP cap here: the scan must visit every source-bearing part or whole
+            // object types silently drop out of the results (SQL returns rows in
+            // physical order, grouped by part type — a fixed cap starved Procedures
+            // in large KBs; see docs/MCP_GeneXus_Bug_Report_gx_search.md). The loop
+            // still stops early once 'limit' hits are collected.
+            var sql = $@"
+SELECT c.CompoundEntityTypeId, c.CompoundEntityId, ev.EntityVersionData,
+       mevc.ModelParentEntityTypeId, mevc.ModelParentEntityId
 FROM EntityVersionComposition c
 LEFT JOIN ModelEntityVersion mev
   ON mev.ModelId=1 AND mev.EntityTypeId=c.ComponentEntityTypeId AND mev.EntityId=c.ComponentEntityId
@@ -456,47 +463,55 @@ LEFT JOIN Entity e
 JOIN EntityVersion ev
   ON ev.EntityTypeId=c.ComponentEntityTypeId AND ev.EntityId=c.ComponentEntityId
  AND ev.EntityVersionId=COALESCE(mev.EntityVersionId, e.EntityLastVersionId)
+LEFT JOIN ModelEntityVersion mevc
+  ON mevc.ModelId=1 AND mevc.EntityTypeId=c.CompoundEntityTypeId AND mevc.EntityId=c.CompoundEntityId
 WHERE c.ComponentEntityTypeId IN ({sourceIdsCsv})
   AND c.CompoundEntityTypeId IN (SELECT CAST(value AS int) FROM STRING_SPLIT(@types, ','))
   AND DATALENGTH(ev.EntityVersionData) > 0";
 
-                var pending = new List<(int type, int id, string snippet)>();
-                var seen = new HashSet<(int, int)>(hits.Select(h => (TypeIdOf(h.Type), h.Id)));
+            var pending = new List<(int type, int id, string snippet)>();
+            var seen = new HashSet<(int, int)>(hits.Select(h => (TypeIdOf(h.Type), h.Id)));
 
-                using (var cmd = new SqlCommand(sql, conn))
+            using (var cmd = new SqlCommand(sql, conn))
+            {
+                cmd.CommandTimeout = 300;
+                cmd.Parameters.AddWithValue("@types", typesCsv);
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
                 {
-                    cmd.Parameters.AddWithValue("@scan", 4000);
-                    cmd.Parameters.AddWithValue("@types", typesCsv);
-                    using var r = cmd.ExecuteReader();
-                    while (r.Read() && pending.Count + hits.Count < limit)
+                    if (pending.Count + hits.Count >= limit) break;
+                    int parentType = r.GetInt32(0);
+                    int parentId = r.GetInt32(1);
+                    if (module is not null)
                     {
-                        int parentType = r.GetInt32(0);
-                        int parentId = r.GetInt32(1);
-                        var blob = (byte[])r[2];
-                        var text = KbDecoder.DecodePart(blob);
-                        if (text is null) continue;
-                        int idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-                        if (idx < 0) continue;
-                        if (!seen.Add((parentType, parentId))) continue;
-
-                        int start = Math.Max(0, idx - 40);
-                        int len = Math.Min(text.Length - start, 160);
-                        pending.Add((parentType, parentId, text.Substring(start, len)));
+                        int objParentType = r.IsDBNull(3) ? 0 : r.GetInt32(3);
+                        int objParentId = r.IsDBNull(4) ? 0 : r.GetInt32(4);
+                        if (!ModuleMatches(ResolveModulePath(objParentType, objParentId), module)) continue;
                     }
-                }
+                    var blob = (byte[])r[2];
+                    var text = KbDecoder.DecodePart(blob);
+                    if (text is null) continue;
+                    int idx = text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+                    if (idx < 0) continue;
+                    if (!seen.Add((parentType, parentId))) continue;
 
-                foreach (var (parentType, parentId, snippet) in pending)
-                {
-                    var (objName, objParentType, objParentId) = ResolveNameAndParent(conn, parentType, parentId);
-                    hits.Add(new SearchHit
-                    {
-                        Id = parentId,
-                        Type = _topLevelById!.GetValueOrDefault(parentType, "?"),
-                        Name = objName,
-                        Module = ResolveModulePath(objParentType, objParentId),
-                        Snippet = snippet,
-                    });
+                    int start = Math.Max(0, idx - 40);
+                    int len = Math.Min(text.Length - start, 160);
+                    pending.Add((parentType, parentId, text.Substring(start, len)));
                 }
+            }
+
+            foreach (var (parentType, parentId, snippet) in pending)
+            {
+                var (objName, objParentType, objParentId) = ResolveNameAndParent(conn, parentType, parentId);
+                hits.Add(new SearchHit
+                {
+                    Id = parentId,
+                    Type = _topLevelById!.GetValueOrDefault(parentType, "?"),
+                    Name = objName,
+                    Module = ResolveModulePath(objParentType, objParentId),
+                    Snippet = snippet,
+                });
             }
         }
 
@@ -505,11 +520,11 @@ WHERE c.ComponentEntityTypeId IN ({sourceIdsCsv})
 
     // ---------- Attributes ----------
 
-    public List<AttributeInfo>? ListAttributes(string transactionName)
+    public List<AttributeInfo>? ListAttributes(string transactionName, string? module = null)
     {
         using var conn = Open();
         EnsureTypeMap(conn);
-        var (typeId, entityId, _, _, _, _, _) = FindEntity(conn, transactionName, "Transaction");
+        var (typeId, entityId, _, _, _, _, _) = FindEntity(conn, transactionName, "Transaction", module);
         if (typeId != _transactionTypeId || entityId < 0) return null;
         return ListAttributesForTransaction(conn, entityId);
     }
@@ -550,8 +565,58 @@ ORDER BY td.trn_pos";
 
     // ---------- Helpers ----------
 
+    private sealed record ObjectCandidate(
+        int TypeId, int EntityId, int VersionId, string Name, string? Desc,
+        int ParentType, int ParentId, string? ModulePath, string TypeName);
+
+    /// <summary>
+    /// Resolves an object by name, optionally scoped to a type and a module path.
+    /// <paramref name="name"/> may be module-qualified ("Cotizaciones.BuscaConvenioPromo");
+    /// an explicit <paramref name="module"/> takes precedence over qualification, and
+    /// <c>module = ""</c> pins the root module. When the name matches objects in more
+    /// than one module and no module was given, throws <see cref="AmbiguousObjectException"/>
+    /// instead of silently picking one. Same-module homonyms of different types keep the
+    /// historical lowest-EntityTypeId pick (e.g. Transaction over its same-named Table).
+    /// </summary>
     private (int typeId, int entityId, int versionId, string name, string? desc, int parentType, int parentId) FindEntity(
-        SqlConnection conn, string name, string? type)
+        SqlConnection conn, string name, string? type, string? module = null)
+    {
+        EnsureContainerTree(conn);
+
+        var candidates = QueryCandidates(conn, name, type);
+
+        // Module-qualified name: only tried when nothing matches the raw name as-is
+        // (GeneXus object names cannot contain dots) and no explicit module was given.
+        if (candidates.Count == 0 && module is null && name.Contains('.'))
+        {
+            int cut = name.LastIndexOf('.');
+            module = name[..cut];
+            candidates = QueryCandidates(conn, name[(cut + 1)..], type);
+        }
+
+        if (module is not null)
+            candidates = candidates.Where(c => ModuleMatches(c.ModulePath, module)).ToList();
+
+        if (candidates.Count == 0) return (-1, -1, -1, "", null, 0, 0);
+
+        var distinctModules = candidates
+            .Select(c => c.ModulePath ?? "")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        if (distinctModules > 1)
+        {
+            var list = string.Join("; ", candidates.Select(c =>
+                $"{c.TypeName}:{c.Name} (id={c.EntityId}, module={(c.ModulePath is null ? "<root>" : $"'{c.ModulePath}'")})"));
+            throw new AmbiguousObjectException(
+                $"Ambiguous object name '{name}': matches {candidates.Count} objects — {list}. " +
+                "Disambiguate with the 'module' parameter (\"\" = root module) or a qualified name like 'Module.Object'.");
+        }
+
+        var c0 = candidates[0];
+        return (c0.TypeId, c0.EntityId, c0.VersionId, c0.Name, c0.Desc, c0.ParentType, c0.ParentId);
+    }
+
+    private List<ObjectCandidate> QueryCandidates(SqlConnection conn, string name, string? type)
     {
         var typeFilter = "";
         var types = ResolveTypes(type);
@@ -559,28 +624,39 @@ ORDER BY td.trn_pos";
             typeFilter = " AND e.EntityTypeId IN (" + string.Join(",", types) + ")";
 
         var sql = @"
-SELECT TOP 1 e.EntityTypeId, e.EntityId,
+SELECT e.EntityTypeId, e.EntityId,
        COALESCE(mev.EntityVersionId, e.EntityLastVersionId) AS CurrentVersionId,
        ev.EntityVersionName, ev.EntityVersionDescription,
        mev.ModelParentEntityTypeId, mev.ModelParentEntityId
 FROM Entity e" + CurrentVersionJoin + @"
 WHERE ev.EntityVersionName = @n " + typeFilter + @"
-ORDER BY e.EntityTypeId";
+ORDER BY e.EntityTypeId, e.EntityId";
 
+        var list = new List<ObjectCandidate>();
         using var cmd = new SqlCommand(sql, conn);
         cmd.Parameters.AddWithValue("@n", name);
         using var r = cmd.ExecuteReader();
-        if (!r.Read()) return (-1, -1, -1, "", null, 0, 0);
-        return (
-            r.GetInt32(0),
-            r.GetInt32(1),
-            r.GetInt32(2),
-            r.IsDBNull(3) ? "" : r.GetString(3),
-            r.IsDBNull(4) ? null : r.GetString(4),
-            r.IsDBNull(5) ? 0 : r.GetInt32(5),
-            r.IsDBNull(6) ? 0 : r.GetInt32(6)
-        );
+        while (r.Read())
+        {
+            int typeId = r.GetInt32(0);
+            int parentType = r.IsDBNull(5) ? 0 : r.GetInt32(5);
+            int parentId = r.IsDBNull(6) ? 0 : r.GetInt32(6);
+            list.Add(new ObjectCandidate(
+                typeId,
+                r.GetInt32(1),
+                r.GetInt32(2),
+                r.IsDBNull(3) ? "" : r.GetString(3),
+                r.IsDBNull(4) ? null : r.GetString(4),
+                parentType, parentId,
+                ResolveModulePath(parentType, parentId),
+                _topLevelById!.GetValueOrDefault(typeId, $"Type{typeId}")));
+        }
+        return list;
     }
+
+    /// <summary>Compares an object's dotted module path against a filter; "" means root.</summary>
+    private static bool ModuleMatches(string? modulePath, string filter) =>
+        string.Equals(modulePath ?? "", filter, StringComparison.OrdinalIgnoreCase);
 
     private static string ToLikePattern(string raw)
     {

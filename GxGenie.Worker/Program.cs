@@ -122,8 +122,10 @@ WorkerResponse Dispatch(WorkerRequest req)
             var name = GetString(p, "name");
             if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
             var type = GetString(p, "type");
-            var detail = session.Repo.ReadObject(name!, type);
-            if (detail is null) return WorkerResponse.Fail($"Object not found: {name}");
+            var module = GetString(p, "module");
+            var detail = session.Repo.ReadObject(name!, type, module);
+            if (detail is null) return WorkerResponse.Fail(
+                $"Object not found: {name}" + (module is null ? "" : $" (module: '{module}')"));
             return WorkerResponse.Ok(detail, req.Id);
         }
         case "gx_search":
@@ -132,14 +134,16 @@ WorkerResponse Dispatch(WorkerRequest req)
             if (string.IsNullOrEmpty(query)) return WorkerResponse.Fail("Missing 'query'");
             var where = GetString(p, "search_in") ?? "name";
             var limit = GetInt(p, "limit", 200);
-            var hits = session.Repo.Search(query!, where, limit);
-            return WorkerResponse.Ok(new { count = hits.Count, hits }, req.Id);
+            var typeFilter = GetString(p, "type");
+            var module = GetString(p, "module");
+            var hits = session.Repo.Search(query!, where, limit, typeFilter, module);
+            return WorkerResponse.Ok(new { count = hits.Count, limit_reached = hits.Count >= limit, hits }, req.Id);
         }
         case "gx_list_attributes":
         {
             var trn = GetString(p, "transaction");
             if (string.IsNullOrEmpty(trn)) return WorkerResponse.Fail("Missing 'transaction'");
-            var attrs = session.Repo.ListAttributes(trn!);
+            var attrs = session.Repo.ListAttributes(trn!, GetString(p, "module"));
             if (attrs is null) return WorkerResponse.Fail($"Transaction not found: {trn}");
             return WorkerResponse.Ok(new { count = attrs.Count, attributes = attrs }, req.Id);
         }
@@ -256,7 +260,7 @@ WorkerResponse Dispatch(WorkerRequest req)
             var name = GetString(p, "name");
             if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
             var type = GetString(p, "type");
-            var data = session.Inspector.GetStructure(name!, type);
+            var data = session.Inspector.GetStructure(name!, type, GetString(p, "module"));
             return WorkerResponse.Ok(data, req.Id);
         }
         case "gx_get_layout":
@@ -264,7 +268,7 @@ WorkerResponse Dispatch(WorkerRequest req)
             var name = GetString(p, "name");
             if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
             var type = GetString(p, "type");
-            var data = session.Inspector.GetLayout(name!, type);
+            var data = session.Inspector.GetLayout(name!, type, GetString(p, "module"));
             return WorkerResponse.Ok(data, req.Id);
         }
         case "gx_get_variables":
@@ -272,7 +276,7 @@ WorkerResponse Dispatch(WorkerRequest req)
             var name = GetString(p, "name");
             if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
             var type = GetString(p, "type");
-            var data = session.Inspector.GetVariables(name!, type);
+            var data = session.Inspector.GetVariables(name!, type, GetString(p, "module"));
             return WorkerResponse.Ok(data, req.Id);
         }
         case "gx_get_unused_variables":
@@ -280,7 +284,7 @@ WorkerResponse Dispatch(WorkerRequest req)
             var name = GetString(p, "name");
             if (string.IsNullOrEmpty(name)) return WorkerResponse.Fail("Missing 'name'");
             var type = GetString(p, "type");
-            var data = session.Inspector.GetUnusedVariables(name!, type);
+            var data = session.Inspector.GetUnusedVariables(name!, type, GetString(p, "module"));
             return WorkerResponse.Ok(data, req.Id);
         }
         case "gx_remove_variable":

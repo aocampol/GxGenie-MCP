@@ -49,6 +49,16 @@ public static class ToolSchemas
     private const string GxNamePattern = "^[A-Za-z][A-Za-z0-9_]{0,63}$";
 
     /// <summary>
+    /// Schema for the optional 'module' parameter of the name-resolving read tools.
+    /// Built fresh per call site — a JsonNode cannot be attached to two parents.
+    /// </summary>
+    private static JsonObject ModuleProp() => Prop("string",
+        "Módulo GeneXus donde vive el objeto (path punteado, ej: 'Cotizaciones' o 'LISAPI.V1'). " +
+        "Usar \"\" (string vacío) para forzar el módulo raíz. Si existen objetos homónimos en " +
+        "distintos módulos y no se especifica, la tool devuelve error de ambigüedad listando los " +
+        "candidatos. Alternativa equivalente: pasar el nombre calificado 'Modulo.Objeto' en 'name'.");
+
+    /// <summary>
     /// Builds the input schema for <c>gx_create_transaction</c>. Kept as a method (not an inline
     /// <c>Obj(...)</c>) because the optional <c>levels</c> tree is recursive and is expressed with
     /// JSON Schema <c>$defs</c> + <c>$ref</c> — a <c>level</c> can contain nested <c>levels</c>.
@@ -182,11 +192,12 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("name", Prop("string", "Nombre exacto del objeto (case-insensitive).")),
+                    ("name", Prop("string", "Nombre exacto del objeto (case-insensitive). Acepta nombre calificado 'Modulo.Objeto' para objetos dentro de un módulo.")),
                     ("type", Prop("string", "Tipo del objeto. Opcional: si se omite, se busca en cualquier tipo.", new JsonObject
                     {
                         ["enum"] = new JsonArray(ObjectTypes.Where(t => t != "All").Select(t => (JsonNode)t).ToArray()),
-                    }))
+                    })),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("name")),
                 ("additionalProperties", false)
@@ -196,17 +207,22 @@ public static class ToolSchemas
         {
             Name = "gx_search",
             WorkerTool = "gx_search",
-            Description = "Busca objetos por nombre (rápido) o dentro del código fuente decodificado (lento en KBs grandes).",
+            Description = "Busca objetos por nombre (rápido) o dentro del código fuente decodificado (lento en KBs grandes). El modo 'code' escanea TODOS los parts con código (source, rules, events, conditions) de todos los tipos de objeto; usar 'type' para acotar el escaneo y acelerarlo.",
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
                     ("query", Prop("string", "Texto a buscar (substring case-insensitive).")),
-                    ("search_in", Prop("string", "Dónde buscar: 'name' (default, rápido) o 'code' (escanea blobs source/rules/events).", new JsonObject
+                    ("search_in", Prop("string", "Dónde buscar: 'name' (default, rápido) o 'code' (escanea los blobs source/rules/events/conditions de la KB completa).", new JsonObject
                     {
                         ["enum"] = EnumOf("name", "code"),
                         ["default"] = "name",
                     })),
-                    ("limit", Prop("integer", "Máximo de hits a devolver.", new JsonObject
+                    ("type", Prop("string", "Limitar la búsqueda a un tipo de objeto (ej: 'Procedure'). Opcional: default todos los tipos.", new JsonObject
+                    {
+                        ["enum"] = new JsonArray(ObjectTypes.Where(t => t != "All").Select(t => (JsonNode)t).ToArray()),
+                    })),
+                    ("module", Prop("string", "Limitar los hits a objetos de un módulo GeneXus (path punteado, ej: 'Cotizaciones'). Usar \"\" para solo módulo raíz. Opcional: default todos.")),
+                    ("limit", Prop("integer", "Máximo de hits a devolver. La respuesta trae limit_reached=true si se cortó por este límite.", new JsonObject
                     {
                         ["minimum"] = 1,
                         ["maximum"] = 5000,
@@ -225,7 +241,8 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("transaction", Prop("string", "Nombre de la Transaction."))
+                    ("transaction", Prop("string", "Nombre de la Transaction. Acepta nombre calificado 'Modulo.Transaction'.")),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("transaction")),
                 ("additionalProperties", false)
@@ -380,11 +397,12 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("name", Prop("string", "Nombre exacto del objeto. Acepta nombre calificado 'Modulo.Objeto'.")),
                     ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
                     {
                         ["enum"] = EnumOf("Transaction", "SDT", "DataSelector", "DataView", "Table"),
-                    }))
+                    })),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("name")),
                 ("additionalProperties", false)
@@ -399,11 +417,12 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("name", Prop("string", "Nombre exacto del objeto. Acepta nombre calificado 'Modulo.Objeto'.")),
                     ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
                     {
                         ["enum"] = EnumOf("WebPanel", "Transaction"),
-                    }))
+                    })),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("name")),
                 ("additionalProperties", false)
@@ -418,11 +437,12 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("name", Prop("string", "Nombre exacto del objeto. Acepta nombre calificado 'Modulo.Objeto'.")),
                     ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
                     {
                         ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction"),
-                    }))
+                    })),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("name")),
                 ("additionalProperties", false)
@@ -437,11 +457,12 @@ public static class ToolSchemas
             InputSchema = Obj(
                 ("type", "object"),
                 ("properties", Obj(
-                    ("name", Prop("string", "Nombre exacto del objeto.")),
+                    ("name", Prop("string", "Nombre exacto del objeto. Acepta nombre calificado 'Modulo.Objeto'.")),
                     ("type", Prop("string", "Tipo del objeto. Opcional.", new JsonObject
                     {
                         ["enum"] = EnumOf("Procedure", "DataProvider", "WebPanel", "Transaction"),
-                    }))
+                    })),
+                    ("module", ModuleProp())
                 )),
                 ("required", new JsonArray("name")),
                 ("additionalProperties", false)

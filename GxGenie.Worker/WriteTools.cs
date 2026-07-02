@@ -429,8 +429,11 @@ public sealed class WriteTools
                 "creates new objects — use gx_add_attribute / gx_update_object_code to modify it.");
 
         // Was the key Attribute already in the KB? Determines key_attribute_reused. Must run
-        // before the Import, which would create it if it is missing.
-        var keyAttributeReused = _repo.ReadObject(keyAttribute, "Attribute") is not null;
+        // before the Import, which would create it if it is missing. An ambiguous match
+        // (same name in several modules) still means "it exists".
+        bool keyAttributeReused;
+        try { keyAttributeReused = _repo.ReadObject(keyAttribute, "Attribute") is not null; }
+        catch (AmbiguousObjectException) { keyAttributeReused = true; }
 
         // Snapshot first so a corrupted import is recoverable.
         var bk = _backup.Snapshot($"create_trn_{args.Name}");

@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] — 2026-07-02 — Fix: `gx_search` code-scan cap · homonym disambiguation (`module` param)
+
+Fixes the two bugs in `docs/MCP_GeneXus_Bug_Report_gx_search.md` (reported
+against the `APEX` KB, 142k entities). No new tool; tool count unchanged.
+
+### Fixed — Bug 1: `gx_search search_in="code"` silently skipped whole object types
+
+The code scan had a hard-coded `TOP 4000` over `EntityVersionComposition`
+with no `ORDER BY`: only the first 4,000 source-bearing part rows (in
+physical/index order, grouped by part type) were ever decoded. In a large KB
+the WebPanel/Transaction *Events* rows alone filled that budget, so
+**Procedures (and any type whose parts sorted later) never appeared in any
+code search** — no error, no warning. In `APEX` that hid 53 Procedures
+calling `GAMRepository.CheckPermission`.
+
+- The cap is gone: the scan now visits **every** source-bearing part
+  (source / rules / events / conditions) and still stops early once `limit`
+  hits are collected. Full scan of the 142k-entity `APEX` KB: ~11 s.
+- New optional `type` parameter on `gx_search` to restrict the scan to one
+  object type (e.g. only `Procedure`) — faster and less noisy for audits.
+- New optional `module` parameter on `gx_search` to keep only hits from one
+  module (`""` = root module only).
+- The response now includes `limit_reached` so a truncated result is visible
+  instead of silent.
+
+### Fixed — Bug 2: homonym objects inside Modules were unreachable / silently wrong
+
+`gx_read_object` resolved names with `SELECT TOP 1 … ORDER BY EntityTypeId`:
+with a root object and a same-named object inside a GeneXus Module (e.g.
+`BuscaConvenioPromo` in root **and** in `Cotizaciones`), it always returned
+the root one with no warning, and there was no way to read the module one.
+
+- All name-resolving read tools (`gx_read_object`, `gx_list_attributes`,
+  `gx_get_structure`, `gx_get_layout`, `gx_get_variables`,
+  `gx_get_unused_variables`) now accept:
+  - an optional **`module`** parameter (dotted path, e.g. `"Cotizaciones"` or
+    `"LISAPI.V1"`; `""` pins the root module), and
+  - a **qualified name** `Modulo.Objeto` in the `name` field (tried when the
+    raw name matches nothing — GeneXus names cannot contain dots).
+- When a bare name matches objects in **more than one module** and no module
+  was given, the tools now fail with an explicit `AmbiguousObjectException`
+  listing every candidate (type, id, module) instead of silently picking one.
+  Same-module homonyms of different types (a Transaction and its same-named
+  Table) keep the historical lowest-`EntityTypeId` pick, so the common
+  `gx_read_object` without `type` is not broken.
+- The write path benefits indirectly: layout writes (`gx_set_control_property`,
+  `gx_add_control`, `gx_remove_control`) resolve the object through the same
+  reader and now refuse to run on an ambiguous name instead of mutating the
+  wrong object. **Known limitation**: writes that resolve via MSBuild tasks
+  (`gx_update_object_code`, `gx_export_xpz`, `gx_build_object`,
+  `gx_delete_object`) still pass the unqualified name to GeneXus and are not
+  module-aware.
+
+### Validated
+
+E2E against the `APEX` KB (GX17, 142,053 entities) with the bug report's exact repros:
+
+1. `gx_search(query="CheckPermission", search_in="code", limit=5000)` →
+   198 hits (was 110) including **43 Procedures** (was 0); all 31 Procedure
+   names individually confirmed in the report are present. ~11 s full scan.
+2. `gx_read_object(name="Cotizaciones.BuscaConvenioPromo")` → returns the
+   module object (id 2491) with all parts decoded (was: not found).
+3. `gx_read_object(name="BuscaConvenioPromo", type="WebPanel")` → explicit
+   ambiguity error listing both candidates (was: silently returned id 87).
+   `module="Cotizaciones"` and `module=""` each select the right one.
+4. Regression: `GxGenie.Gateway/test-mcp.ps1` (SampleKB) passes; `gx_search`
+   name mode, `type`/`module` filters and qualified names on the inspector
+   tools all verified.
+
+---
+
 ## [1.3.1] — 2026-05-21 — Fix: objects nested in modules/folders were invisible
 
 Bug fix for `docs/MCP-BUG-REPORT-modulos.md`. Catalog tools silently omitted

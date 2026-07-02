@@ -35,6 +35,16 @@ public sealed class WorkerResponse
         => new() { Success = false, Error = error, Id = id };
 }
 
+/// <summary>
+/// Thrown when an object name matches objects in more than one module (e.g. root +
+/// "Cotizaciones") and the caller did not disambiguate. Silently picking one would
+/// read — or worse, write — the wrong object.
+/// </summary>
+public sealed class AmbiguousObjectException : Exception
+{
+    public AmbiguousObjectException(string message) : base(message) { }
+}
+
 public sealed class ObjectListItem
 {
     public string Name { get; set; } = "";
