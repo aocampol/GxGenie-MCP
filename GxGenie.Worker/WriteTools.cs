@@ -42,7 +42,10 @@ public sealed class WriteTools
             throw new ArgumentException("'output_path' is required");
 
         EnsureParentDir(args.OutputPath);
-        var objectsAttr = string.Join(",", args.Objects);
+        // MSBuild list-valued task parameters (ITaskItem[]) use ';' as the item separator,
+        // not ','. With a comma the Export task silently parsed only the first object and
+        // dropped the rest (no error) — confirmed exporting 5 Transactions and getting 1.
+        var objectsAttr = string.Join(";", args.Objects);
 
         var task = new MsBuildRunner.TaskInvocation("Export", new Dictionary<string, string>
         {
@@ -221,7 +224,8 @@ public sealed class WriteTools
         if (args.Objects is null || args.Objects.Length == 0)
             throw new ArgumentException("'objects' is required and must contain at least one item");
 
-        var objectsAttr = string.Join(",", args.Objects);
+        // ';' is the MSBuild item-list separator, not ',' — see same fix in ExportXpz.
+        var objectsAttr = string.Join(";", args.Objects);
         var bk = _backup.Snapshot($"delete_{SanitizeForFilename(objectsAttr)}");
 
         var task = new MsBuildRunner.TaskInvocation("DeleteObject", new Dictionary<string, string>

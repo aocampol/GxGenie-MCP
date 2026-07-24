@@ -61,7 +61,17 @@ public sealed class MsBuildRunner
         sb.AppendLine($"  </PropertyGroup>");
         sb.AppendLine($"  <Import Project=\"{XmlAttr(targetsPath)}\"/>");
         sb.AppendLine("  <Target Name=\"Run\">");
-        sb.AppendLine($"    <OpenKnowledgeBase Directory=\"$(KBPath)\" ReadOnly=\"{(readOnly ? "True" : "False")}\"/>");
+        // GX17U11's OpenKnowledgeBase task (Genexus.MsBuild.Tasks.dll bajo MERGEMOD\) no expone
+        // el parámetro ReadOnly (MSB4064 si se lo pasamos, sea cual sea el valor) — a diferencia
+        // de GX17U1. Lo omitimos para esa versión; el resto sigue como antes.
+        if (SupportsOpenKbReadOnlyParam(_config.GxVersion))
+        {
+            sb.AppendLine($"    <OpenKnowledgeBase Directory=\"$(KBPath)\" ReadOnly=\"{(readOnly ? "True" : "False")}\"/>");
+        }
+        else
+        {
+            sb.AppendLine("    <OpenKnowledgeBase Directory=\"$(KBPath)\"/>");
+        }
         foreach (var t in tasks)
         {
             sb.Append($"    <{t.TaskName}");
@@ -123,9 +133,18 @@ public sealed class MsBuildRunner
     }
 
     /// <summary>
+    /// Indica si la tarea <c>OpenKnowledgeBase</c> de esta versión de GeneXus expone el
+    /// parámetro <c>ReadOnly</c>. Confirmado ausente en GX17U11 (MSB4064); presente en GX17U1.
+    /// Versiones desconocidas se tratan como compatibles (comportamiento previo a este fix).
+    /// </summary>
+    private static bool SupportsOpenKbReadOnlyParam(string? gxVersion) =>
+        !string.Equals(gxVersion, "17U11", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Localiza <c>Genexus.Tasks.targets</c> dentro del install de GeneXus.
-    /// En GX17 está en la raíz del install; en GX18 puede haberse movido a
-    /// subdirectorios (<c>MSBuild\</c>, <c>Tasks\</c>) — chequeamos varios candidatos.
+    /// En GX17U1 está en la raíz del install; en GX17U11 vive bajo <c>MERGEMOD\</c>;
+    /// en GX18 puede haberse movido a otros subdirectorios (<c>MSBuild\</c>, <c>Tasks\</c>)
+    /// — chequeamos varios candidatos.
     /// </summary>
     public static string FindGenexusTargets(string gxInstallPath)
     {
@@ -135,6 +154,7 @@ public sealed class MsBuildRunner
             Path.Combine(gxInstallPath, "MSBuild", "Genexus.Tasks.targets"),
             Path.Combine(gxInstallPath, "Tasks", "Genexus.Tasks.targets"),
             Path.Combine(gxInstallPath, "Build", "Genexus.Tasks.targets"),
+            Path.Combine(gxInstallPath, "MERGEMOD", "Genexus.Tasks.targets"),
         };
         var found = candidates.FirstOrDefault(File.Exists);
         if (found is not null) return found;
@@ -154,6 +174,7 @@ public sealed class MsBuildRunner
             Path.Combine(gxInstallPath, "genexus.msbuild.tasks.dll"),
             Path.Combine(gxInstallPath, "MSBuild", "genexus.msbuild.tasks.dll"),
             Path.Combine(gxInstallPath, "Tasks", "genexus.msbuild.tasks.dll"),
+            Path.Combine(gxInstallPath, "MERGEMOD", "genexus.msbuild.tasks.dll"),
         };
         var found = candidates.FirstOrDefault(File.Exists);
         if (found is not null) return found;
