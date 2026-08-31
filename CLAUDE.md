@@ -322,6 +322,42 @@ Corrige los dos bugs de `docs/MCP_GeneXus_Bug_Report_gx_search.md`:
   siguen resolviendo por nombre sin calificar (limitación documentada en
   CHANGELOG).
 
+### v1.4.1 (2026-08-31) — fixes del bug report de `gx_update_object_code` (documentation)
+
+Corrige los tres bugs de
+`docs/MCP_GeneXus_Bug_Report_gx_update_object_code_documentation.md`:
+
+- **Bug 1 — ambigüedad de Part entre `<Object>`s**: `ReplacePartSourceInXpz`
+  (usada por `gx_update_object_code`) buscaba `<Part type="guid">` en todo el
+  XPZ exportado en vez de acotar al `<Object>` del objeto pedido. Como el Part
+  "documentation" comparte type-guid entre todos los tipos, exportar una
+  Transaction con N atributos (cada uno con su propio Object + Part
+  "documentation") producía N+1 coincidencias y fallaba siempre con
+  "esperaba exactamente 1". Ahora se ubica primero el `<Object type="..."
+  name="...">` específico (mismo patrón que ya usaba `gx_remove_attribute`) vía
+  el nuevo `XpzPartMap.ObjectTypeGuidFor(objectType)`, y el Part se busca sólo
+  dentro de ese Object.
+- **Bug 2 — el contenido de "documentation" no se persistía**: el código
+  asumía que todo Part editable guarda su texto en `<Source>`, pero los Parts
+  de `kind="html"` (documentation) usan `<InnerHtml>` — confirmado en
+  `GxGenie.Worker/probes/discovery/parts-discovery-report.md`. Un Part nunca
+  completado además exporta sólo `<Properties />`, sin elemento de texto. El
+  import no fallaba pero descartaba el contenido en silencio. Ahora
+  `ReplacePartSourceInXpz` elige `Source` vs `InnerHtml` según `partInfo.Kind`
+  y crea el elemento si no existe.
+- **Bug 3 — respuestas desincronizadas del Worker**: el Worker corre un loop
+  stdin/stdout síncrono y estrictamente FIFO. Si `WorkerProxy.CallAsync`
+  hacía timeout, abandonaba la lectura pero el Worker igual terminaba de
+  procesar esa request y escribía su respuesta más tarde, quedando sin
+  consumir en el pipe — la siguiente llamada la leía en vez de la propia
+  (dos tool calls distintas devolviendo el mismo output). Ahora se
+  correlaciona por el `id` que el Worker ya ecoa en cada respuesta,
+  descartando líneas rezagadas hasta encontrar la que corresponde.
+
+No implementada (fuera de alcance de este fix, sugerida en el bug report):
+verificación post-import releyendo el objeto para confirmar que el contenido
+quedó aplicado, en vez de confiar sólo en el log de MSBuild.
+
 ## Fase 1 — completada (resumen)
 GxExplorer compila con `csc.exe` de .NET Framework 4.8 y corre contra
 `C:\KB\Gx17U1\SampleKB\SampleKB.gxw`. La app llega a invocar
