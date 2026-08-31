@@ -209,4 +209,36 @@ public static class XpzPartMap
 
     /// <summary>Tipos de objeto con al menos un Part registrado.</summary>
     public static IReadOnlyCollection<string> KnownObjectTypes => ByObjectType.Keys;
+
+    /// <summary>
+    /// Map <c>objectType → object-type GUID</c> (el <c>&lt;Object type="..."&gt;</c> del XPZ, no el del Part).
+    /// Usado para acotar la búsqueda de un Part al <c>&lt;Object&gt;</c> correcto cuando el export trae varios
+    /// (p.ej. una Transaction exporta también su Table física, y ambos objetos pueden compartir el mismo
+    /// type-guid de Part — ver Bug 1 de docs/MCP_GeneXus_Bug_Report_gx_update_object_code_documentation.md).
+    /// </summary>
+    private static readonly Dictionary<string, string> ObjectTypeGuidByName =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Procedure"]       = Type_Procedure,
+            ["DataProvider"]    = Type_DataProvider,
+            ["WebPanel"]        = Type_WebPanel,
+            ["Transaction"]     = Type_Transaction,
+            ["Domain"]          = Type_Domain,
+            ["DataSelector"]    = Type_DataSelector,
+            ["DataView"]        = Type_DataView,
+            ["Table"]           = Type_Table,
+            ["SDT"]             = Type_SDT,
+            ["Query"]           = Type_Query,
+            ["Module"]          = Type_Module,
+            ["Image"]           = Type_Image,
+            ["WebTheme"]        = Type_WebTheme,
+            ["Theme"]           = Type_WebTheme,
+            ["ExternalObject"]  = Type_ExternalObject,
+            ["Group"]           = Type_SubtypeGroup,
+            ["Category"]        = Type_Category,
+        };
+
+    /// <summary>Devuelve el GUID del <c>&lt;Object type="..."&gt;</c> para un objectType conocido, o null.</summary>
+    public static string? ObjectTypeGuidFor(string objectType) =>
+        !string.IsNullOrEmpty(objectType) && ObjectTypeGuidByName.TryGetValue(objectType, out var g) ? g : null;
 }

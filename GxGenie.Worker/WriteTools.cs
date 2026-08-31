@@ -1429,7 +1429,7 @@ public sealed class WriteTools
         // 3) Modificar el XPZ in-place.
         try
         {
-            ReplacePartSourceInXpz(xpzPath, partGuid, args.NewSource);
+            ReplacePartSourceInXpz(xpzPath, args.Type, args.Name, partGuid, partInfo.Kind, args.NewSource);
         }
         catch (Exception ex)
         {
@@ -1478,11 +1478,17 @@ public sealed class WriteTools
     }
 
     /// <summary>
-    /// Abre el .xpz como ZIP, encuentra el único archivo XML, ubica el <c>&lt;Part type="guid"&gt;</c>
-    /// target y reemplaza el contenido de su <c>&lt;Source&gt;</c> por un nuevo CDATA. Re-empaqueta
-    /// preservando el nombre del entry. Si el part no existe o no tiene <c>&lt;Source&gt;</c>, lanza.
+    /// Abre el .xpz como ZIP, encuentra el único archivo XML, ubica el <c>&lt;Object&gt;</c> específico
+    /// pedido (por su object-type GUID + nombre) — un export de un solo objeto puede traer varios
+    /// <c>&lt;Object&gt;</c> (p.ej. una Transaction exporta también su Table física), y ambos pueden
+    /// compartir el mismo type-guid de Part si son homónimos estructurales — y dentro de ese objeto,
+    /// el <c>&lt;Part type="guid"&gt;</c> target, reemplazando el contenido de su elemento de texto
+    /// (<c>&lt;Source&gt;</c> para <c>kind</c> "text"/"xml", <c>&lt;InnerHtml&gt;</c> para <c>kind</c>
+    /// "html" — p.ej. el Part "documentation") por un nuevo CDATA. Cuando el Part nunca tuvo contenido
+    /// (export trae sólo <c>&lt;Properties /&gt;</c>, sin el elemento de texto) lo crea. Re-empaqueta
+    /// preservando el nombre del entry. Si el Object o el Part no existen, lanza.
     /// </summary>
-    private static void ReplacePartSourceInXpz(string xpzPath, string targetPartGuid, string newSource)
+    private static void ReplacePartSourceInXpz(string xpzPath, string objectType, string objectName, string targetPartGuid, string partKind, string newSource)
     {
         string innerName;
         XDocument doc;
@@ -1497,30 +1503,60 @@ public sealed class WriteTools
             doc = XDocument.Load(stream);
         }
 
-        var candidates = doc.Descendants("Part")
+        var objectTypeGuid = XpzPartMap.ObjectTypeGuidFor(objectType);
+        var hostObj = objectTypeGuid is null
+            ? null
+            : doc.Descendants("Object").FirstOrDefault(o =>
+                string.Equals(o.Attribute("type")?.Value, objectTypeGuid, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(o.Attribute("name")?.Value, objectName, StringComparison.OrdinalIgnoreCase));
+        if (hostObj is null)
+        {
+            var objectsFound = doc.Descendants("Object")
+                .Select(o => $"{o.Attribute("type")?.Value}:{o.Attribute("name")?.Value}")
+                .Distinct()
+                .ToList();
+            throw new InvalidOperationException(
+                $"No se encontró <Object type=\"{objectTypeGuid ?? "?"}\" name=\"{objectName}\"> " +
+                $"({objectType}:{objectName}) en el XPZ exportado. Objects presentes: {string.Join(", ", objectsFound)}");
+        }
+
+        var candidates = hostObj.Elements("Part")
             .Where(p => string.Equals(p.Attribute("type")?.Value, targetPartGuid, StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (candidates.Count == 0)
         {
-            var found = doc.Descendants("Part")
+            var found = hostObj.Elements("Part")
                 .Select(p => p.Attribute("type")?.Value)
                 .Where(g => !string.IsNullOrEmpty(g))
                 .Distinct()
                 .ToList();
             throw new InvalidOperationException(
-                $"No se encontró ningún <Part type=\"{targetPartGuid}\"> en el XPZ exportado. " +
-                $"Parts presentes: {string.Join(", ", found)}");
+                $"No se encontró ningún <Part type=\"{targetPartGuid}\"> dentro de <Object {objectType}:{objectName}>. " +
+                $"Parts presentes en ese Object: {string.Join(", ", found)}");
         }
         if (candidates.Count > 1)
             throw new InvalidOperationException(
-                $"Se encontraron {candidates.Count} <Part type=\"{targetPartGuid}\"> — esperaba exactamente 1.");
+                $"Se encontraron {candidates.Count} <Part type=\"{targetPartGuid}\"> dentro de <Object {objectType}:{objectName}> " +
+                "— esperaba exactamente 1.");
 
-        var sourceEl = candidates[0].Element("Source")
-            ?? throw new InvalidOperationException(
-                $"El <Part type=\"{targetPartGuid}\"> no tiene un sub-elemento <Source> editable. " +
-                "Este Part probablemente guarda Properties u otro formato no-textual.");
-        sourceEl.RemoveNodes();
-        sourceEl.Add(new XCData(newSource));
+        // El nombre del elemento de texto depende del kind del Part: los Parts "html"
+        // (p.ej. Documentation) guardan su contenido en <InnerHtml>, no en <Source> —
+        // confirmado en probes/discovery/parts-discovery-report.md (Procedure/Domain/
+        // Module/ExternalObject muestran "inner-html" con children InnerHtml,Properties).
+        var textTag = string.Equals(partKind, "html", StringComparison.OrdinalIgnoreCase) ? "InnerHtml" : "Source";
+        var partEl = candidates[0];
+        var textEl = partEl.Element(textTag);
+        if (textEl is null)
+        {
+            // Un Part que nunca tuvo contenido exporta sólo <Properties /> — sin el
+            // elemento de texto. Lo creamos antes de <Properties> (o al final si no la hay).
+            textEl = new XElement(textTag);
+            var propertiesEl = partEl.Element("Properties");
+            if (propertiesEl != null) propertiesEl.AddBeforeSelf(textEl);
+            else partEl.Add(textEl);
+        }
+        textEl.RemoveNodes();
+        textEl.Add(new XCData(newSource));
 
         if (doc.Declaration is null) doc.Declaration = new XDeclaration("1.0", "utf-8", null);
         var settings = new XmlWriterSettings

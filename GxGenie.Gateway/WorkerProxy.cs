@@ -49,10 +49,11 @@ public sealed class WorkerProxy : IDisposable
             EnsureStarted();
             var p = _process!;
 
+            var requestId = Guid.NewGuid().ToString("N");
             var requestObj = new Dictionary<string, object?>
             {
                 ["tool"] = tool,
-                ["id"] = Guid.NewGuid().ToString("N"),
+                ["id"] = requestId,
             };
             if (parameters.HasValue && parameters.Value.ValueKind == JsonValueKind.Object)
                 requestObj["params"] = parameters.Value;
@@ -64,21 +65,57 @@ public sealed class WorkerProxy : IDisposable
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(_timeoutSeconds));
 
-            var readTask = p.StandardOutput.ReadLineAsync(cts.Token).AsTask();
-            string? line;
-            try
+            // El Worker corre un loop stdin/stdout estrictamente síncrono y FIFO (una request
+            // a la vez, una respuesta por línea, en orden). Si una llamada anterior superó el
+            // timeout, el Gateway abandonó esa lectura pero el Worker igual terminó de
+            // procesarla y escribió su respuesta — que queda sin consumir en el pipe. La
+            // próxima llamada leería esa línea vieja primero y la confundiría con la propia
+            // (bug reportado: dos tool calls distintas devolviendo el mismo output). Como el
+            // Worker siempre ecoa el "id" de la request en su respuesta, correlacionamos por
+            // id y descartamos cualquier línea rezagada hasta encontrar la nuestra.
+            while (true)
             {
-                line = await readTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
-            {
-                throw new TimeoutException($"Worker did not respond within {_timeoutSeconds}s for tool '{tool}'. Stderr so far:\n{DrainStderr()}");
-            }
+                string? line;
+                try
+                {
+                    line = await p.StandardOutput.ReadLineAsync(cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Worker did not respond within {_timeoutSeconds}s for tool '{tool}' (request {requestId}). Stderr so far:\n{DrainStderr()}");
+                }
 
-            if (line is null)
-                throw new InvalidOperationException($"Worker exited unexpectedly. Stderr:\n{DrainStderr()}");
+                if (line is null)
+                    throw new InvalidOperationException($"Worker exited unexpectedly while waiting for '{tool}' (request {requestId}). Stderr:\n{DrainStderr()}");
 
-            return JsonDocument.Parse(line).RootElement.Clone();
+                JsonElement root;
+                try
+                {
+                    root = JsonDocument.Parse(line).RootElement.Clone();
+                }
+                catch (JsonException ex)
+                {
+                    throw new InvalidOperationException($"Worker sent malformed JSON while waiting for '{tool}' (request {requestId}): {ex.Message}\nLine: {line}");
+                }
+
+                var responseId = root.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+                    ? idEl.GetString()
+                    : null;
+                if (!string.IsNullOrEmpty(responseId) && !string.Equals(responseId, requestId, StringComparison.Ordinal))
+                {
+                    // Respuesta rezagada de una llamada anterior que hizo timeout del lado del
+                    // Gateway pero terminó igual en el Worker. La descartamos y seguimos
+                    // esperando la nuestra — no hay riesgo de loop infinito porque el Worker
+                    // procesa una request por vez en el mismo orden en que se encolan.
+                    lock (_stderrBuffer)
+                    {
+                        _stderrBuffer.AppendLine($"[gateway] discarded stale worker response id={responseId} while waiting for '{tool}' (request {requestId})");
+                    }
+                    continue;
+                }
+
+                return root;
+            }
         }
         finally
         {
