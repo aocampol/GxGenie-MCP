@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] — 2026-08-31 — Fix: `gx_update_object_code` on `documentation` · stale worker responses
+
+Fixes the three bugs in
+`docs/MCP_GeneXus_Bug_Report_gx_update_object_code_documentation.md`
+(reported against the `APEX` KB, `BDevolucionExtraordinaria` Transaction). No
+new tool; tool count unchanged.
+
+### Fixed — Bug 1: Part lookup wasn't scoped to the requested `<Object>`
+
+`WriteTools.ReplacePartSourceInXpz` (the XPZ patcher behind
+`gx_update_object_code`) searched for `<Part type="guid">` across the
+**entire** exported XPZ instead of inside the specific `<Object>` for the
+requested object. The `documentation` Part's type-guid is shared by every
+object type, including `Attribute`, so exporting a Transaction with N
+attributes produced N+1 matching `<Part>` nodes and the call always failed
+with `InvalidOperationException: Se encontraron N <Part type="..."> —
+esperaba exactamente 1`.
+
+- The XPZ is now searched for the `<Object type="{objectTypeGuid}"
+  name="{name}">` matching the request first — the same pattern
+  `gx_add_attribute`/`gx_remove_attribute` already used — and the target
+  `<Part>` is looked up only among that Object's children.
+- New `XpzPartMap.ObjectTypeGuidFor(objectType)` maps every known object type
+  name to its `<Object type="...">` GUID.
+
+### Fixed — Bug 2: `documentation` content silently failed to persist
+
+The patcher assumed every editable Part stores its text in a `<Source>`
+child element. Parts of `kind="html"` (`documentation`) actually store it in
+`<InnerHtml>` — confirmed against
+`GxGenie.Worker/probes/discovery/parts-discovery-report.md`, generated in an
+earlier discovery session but never cross-checked against this code path. A
+Part that was never filled in from the IDE exports with only `<Properties
+/>` — no text element at all — so even picking the right tag wasn't enough.
+Because MSBuild's `Import` task doesn't error on an unrecognized child
+element inside a `<Part>`, the whole operation looked successful (import log
+ended in `Import Task Success`) while the content was discarded.
+
+- `ReplacePartSourceInXpz` now picks `Source` or `InnerHtml` based on the
+  Part's `Kind` (from `XpzPartMap`), and creates the element (before
+  `<Properties>`) when the Part has no prior content.
+
+### Fixed — Bug 3: unrelated tool calls could return a previous call's response
+
+`GxGenie.Worker`'s stdin/stdout loop is strictly synchronous and FIFO: it
+reads one request line, blocks until it's fully processed, writes one
+response line, then reads the next. `WorkerProxy.CallAsync` didn't account
+for what happens when the *Gateway* times out waiting: it abandoned the
+read, but the Worker kept running the same request to completion and wrote
+its response anyway — left unconsumed in the pipe. The next, unrelated
+`CallAsync` would then read that stale line first and return it as if it
+were its own result (observed: `gx_read_object` and a following
+`gx_build_object` call returning byte-identical output).
+
+- The Worker already echoes the request's `id` in every response
+  (`WorkerResponse.Ok/Fail(..., req.Id)`) but the Gateway never checked it.
+  `CallAsync` now loops on `ReadLineAsync`, discarding any line whose `id`
+  doesn't match the request it just sent, until the matching one arrives (or
+  the timeout budget is exhausted). Bounded by construction — the Worker
+  processes exactly one request at a time in enqueue order, so at most one
+  stale line can be pending per prior timeout.
+
+### Not fixed — deferred
+
+The bug report also suggested a post-import verification step (re-read the
+object after `Import` and confirm the expected content actually landed,
+instead of trusting the MSBuild log alone). Out of scope for this release;
+tracked as a follow-up.
+
+### Validated
+
+`GxGenie.Worker` and `GxGenie.Gateway` both rebuild clean (0 errors). Not yet
+re-validated E2E against a live KB — the `documentation`/`InnerHtml` shape
+fix in particular should be re-run against the original `APEX` repro
+(`BDevolucionExtraordinaria`) once the `genexus` MCP connection is
+reconnected.
+
+---
+
 ## [1.4.0] — 2026-07-02 — Fix: `gx_search` code-scan cap · homonym disambiguation (`module` param)
 
 Fixes the two bugs in `docs/MCP_GeneXus_Bug_Report_gx_search.md` (reported
